@@ -139,7 +139,10 @@ if ($tab === 'bands') {
         if ($action === 'edit' && $bandid > 0) {
             $formurl->param('bandid', $bandid);
         }
-        $bandform = new \mod_scorecard\form\band_form($formurl);
+        $bandform = new \mod_scorecard\form\band_form($formurl, [
+            'scorecardid' => $scorecard->id,
+            'bandid' => $action === 'edit' && $bandid > 0 ? $bandid : null,
+        ]);
 
         if ($bandform->is_cancelled()) {
             redirect($tabbaseurl);
@@ -302,6 +305,23 @@ switch ($tab) {
                 $tabbaseurl
             );
             break;
+        }
+
+        $coverage = scorecard_compute_band_coverage((int)$scorecard->id);
+        if ($coverage['itemcount'] === 0) {
+            echo $OUTPUT->notification(
+                get_string('manage:bands:noitemsyet', 'mod_scorecard'),
+                \core\output\notification::NOTIFY_INFO
+            );
+        } else if (!empty($coverage['gaps'])) {
+            $rangetexts = [];
+            foreach ($coverage['gaps'] as $gap) {
+                $rangetexts[] = $gap['min'] . '–' . $gap['max'];
+            }
+            echo $OUTPUT->notification(
+                get_string('band:warning:gaps', 'mod_scorecard', implode(', ', $rangetexts)),
+                \core\output\notification::NOTIFY_WARNING
+            );
         }
 
         $renderer = $PAGE->get_renderer('mod_scorecard');

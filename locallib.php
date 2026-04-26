@@ -289,3 +289,131 @@ function scorecard_delete_band(int $bandid): void {
 
     $DB->delete_records('scorecard_bands', ['id' => $bandid]);
 }
+
+/**
+ * Compute band coverage analysis: overlaps (hard error), gaps (warning), item count.
+ *
+ * Returns a structured array consumed by both band_form::validation() (for
+ * blocking save on overlap) and the manage.php Bands tab default render (for
+ * surfacing a gap warning above the list). Pure logic — fully unit-testable
+ * without HTTP or form scaffolding.
+ *
+ * Modes:
+ * - $proposed === null: analyse the persisted band set as-is (used by manage
+ *   page for the standing gap warning).
+ * - $proposed !== null: inject the proposed band into the working set as if
+ *   it were saved, replacing $excludebandid. Used by band_form::validation()
+ *   to evaluate "would this save introduce overlap?".
+ *
+ * Overlaps: pairwise check, both bounds inclusive. Off-by-one edges
+ * (a.maxscore == b.minscore) ARE reported as a one-point overlap because
+ * the scoring engine §11 uses inclusive bounds on both sides — a learner
+ * scoring exactly that value would match two bands without disambiguation.
+ *
+ * Gaps: computed only when overlaps is empty AND itemcount > 0. Theoretical
+ * range = itemcount × scalemin .. itemcount × scalemax. Bands clipped to
+ * range; gaps reported as a list of [min, max] tuples sorted by min ASC.
+ *
+ * @param int $scorecardid
+ * @param int|null $excludebandid Existing band id to exclude (when editing).
+ * @param stdClass|null $proposed Synthetic band {label, minscore, maxscore}
+ *                                injected into the working set as id=0.
+ * @return array Keys: overlaps (list of stdClass), gaps (list of {min, max}),
+ *               itemcount (int).
+ */
+function scorecard_compute_band_coverage(
+    int $scorecardid,
+    ?int $excludebandid = null,
+    ?stdClass $proposed = null
+): array {
+    global $DB;
+
+    $params = ['scorecardid' => $scorecardid];
+    $sql = 'SELECT id, label, minscore, maxscore
+            FROM {scorecard_bands}
+            WHERE scorecardid = :scorecardid AND deleted = 0';
+    if ($excludebandid !== null) {
+        $sql .= ' AND id != :excludebandid';
+        $params['excludebandid'] = $excludebandid;
+    }
+    $sql .= ' ORDER BY minscore ASC, id ASC';
+    $bands = array_values($DB->get_records_sql($sql, $params));
+
+    if ($proposed !== null) {
+        $bands[] = (object)[
+            'id' => 0,
+            'label' => (string)$proposed->label,
+            'minscore' => (int)$proposed->minscore,
+            'maxscore' => (int)$proposed->maxscore,
+        ];
+        usort($bands, function (stdClass $a, stdClass $b): int {
+            return (int)$a->minscore - (int)$b->minscore;
+        });
+    }
+
+    $itemcount = (int)$DB->count_records('scorecard_items', [
+        'scorecardid' => $scorecardid,
+        'deleted' => 0,
+        'visible' => 1,
+    ]);
+
+    $overlaps = [];
+    $bandcount = count($bands);
+    for ($i = 0; $i < $bandcount; $i++) {
+        for ($j = $i + 1; $j < $bandcount; $j++) {
+            $a = $bands[$i];
+            $b = $bands[$j];
+            $lo = max((int)$a->minscore, (int)$b->minscore);
+            $hi = min((int)$a->maxscore, (int)$b->maxscore);
+            if ($lo <= $hi) {
+                $overlaps[] = (object)[
+                    'a_id' => (int)$a->id,
+                    'a_label' => $a->label,
+                    'a_min' => (int)$a->minscore,
+                    'a_max' => (int)$a->maxscore,
+                    'b_id' => (int)$b->id,
+                    'b_label' => $b->label,
+                    'b_min' => (int)$b->minscore,
+                    'b_max' => (int)$b->maxscore,
+                    'overlap_min' => $lo,
+                    'overlap_max' => $hi,
+                ];
+            }
+        }
+    }
+
+    $gaps = [];
+    if (empty($overlaps) && $itemcount > 0) {
+        $scorecard = $DB->get_record(
+            'scorecard',
+            ['id' => $scorecardid],
+            'scalemin, scalemax',
+            MUST_EXIST
+        );
+        $rangemin = $itemcount * (int)$scorecard->scalemin;
+        $rangemax = $itemcount * (int)$scorecard->scalemax;
+
+        $cursor = $rangemin;
+        foreach ($bands as $band) {
+            $bmin = (int)$band->minscore;
+            $bmax = (int)$band->maxscore;
+            if ($bmax < $rangemin || $bmin > $rangemax) {
+                continue;
+            }
+            $clippedmin = max($bmin, $rangemin);
+            if ($clippedmin > $cursor) {
+                $gaps[] = ['min' => $cursor, 'max' => $clippedmin - 1];
+            }
+            $cursor = max($cursor, min($bmax, $rangemax) + 1);
+        }
+        if ($cursor <= $rangemax) {
+            $gaps[] = ['min' => $cursor, 'max' => $rangemax];
+        }
+    }
+
+    return [
+        'overlaps' => $overlaps,
+        'gaps' => $gaps,
+        'itemcount' => $itemcount,
+    ];
+}

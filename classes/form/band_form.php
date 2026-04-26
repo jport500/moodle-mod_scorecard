@@ -20,9 +20,17 @@
  * Standard moodleform — NOT dynamic_form. Submission is handled server-side
  * by manage.php; no AJAX. Fields cover the SPEC §4.3 surface exposed in MVP.
  *
- * Validation here is single-band self-consistency only (label non-empty,
- * minscore ≤ maxscore). Inter-band overlap detection lands in 2.4 as a
- * save-time pass over the full band set.
+ * Validation surfaces three rules:
+ * - Label non-empty (single-band self-consistency).
+ * - minscore ≤ maxscore (single-band self-consistency).
+ * - No overlap with sibling bands (cross-band, blocks save). Computed by
+ *   scorecard_compute_band_coverage() in locallib.php; the form passes the
+ *   proposed band values plus the current band id (when editing) to suppress
+ *   self-overlap false positives.
+ *
+ * Gap detection is NOT a form-level error — gaps surface as a warning above
+ * the bands list on manage.php's default Bands-tab render (per SPEC §4.3
+ * "Gaps in coverage: Warning (not error)").
  *
  * @package    mod_scorecard
  * @copyright  2026 LMS Light
@@ -32,11 +40,13 @@
 namespace mod_scorecard\form;
 
 use moodleform;
+use stdClass;
 
 defined('MOODLE_INTERNAL') || die();
 
 global $CFG;
 require_once($CFG->libdir . '/formslib.php');
+require_once($CFG->dirroot . '/mod/scorecard/locallib.php');
 
 /**
  * Add/edit form for a result band.
@@ -95,10 +105,11 @@ class band_form extends moodleform {
     }
 
     /**
-     * Validate form data — single-band self-consistency.
+     * Validate form data.
      *
-     * Inter-band overlap detection is deliberately deferred to 2.4 so this
-     * form keeps a single concern.
+     * Layered checks: self-consistency (label, minscore ≤ maxscore) runs first;
+     * cross-band overlap detection runs only when self-consistency passes,
+     * because overlap detection requires a well-formed proposed range.
      *
      * @param array $data Submitted data.
      * @param array $files Submitted files (unused; maxfiles is 0).
@@ -107,16 +118,63 @@ class band_form extends moodleform {
     public function validation($data, $files): array {
         $errors = parent::validation($data, $files);
 
-        $label = (string)($data['label'] ?? '');
-        if (trim($label) === '') {
+        $label = trim((string)($data['label'] ?? ''));
+        if ($label === '') {
             $errors['label'] = get_string('band:error:labelempty', 'mod_scorecard');
         }
 
-        if (
-            isset($data['minscore'], $data['maxscore'])
-            && (int)$data['maxscore'] < (int)$data['minscore']
-        ) {
+        $hasrange = isset($data['minscore'], $data['maxscore']);
+        if ($hasrange && (int)$data['maxscore'] < (int)$data['minscore']) {
             $errors['maxscore'] = get_string('band:error:minmaxinvalid', 'mod_scorecard');
+        }
+
+        // Cross-band overlap check: only when this band is well-formed.
+        if ($hasrange && empty($errors['maxscore']) && $label !== '') {
+            $scorecardid = (int)$this->_customdata['scorecardid'];
+            $excludebandid = $this->_customdata['bandid'] ?? null;
+
+            $proposed = (object)[
+                'label' => $label,
+                'minscore' => (int)$data['minscore'],
+                'maxscore' => (int)$data['maxscore'],
+            ];
+
+            $coverage = scorecard_compute_band_coverage(
+                $scorecardid,
+                $excludebandid,
+                $proposed
+            );
+
+            $messages = [];
+            foreach ($coverage['overlaps'] as $o) {
+                // Only surface overlaps that involve the proposed band (id=0).
+                // Pre-existing overlaps between other bands are not this save's
+                // problem; they will surface separately when those bands edit.
+                if ($o->a_id === 0) {
+                    $other = (object)[
+                        'min' => $o->overlap_min,
+                        'max' => $o->overlap_max,
+                        'otherlabel' => $o->b_label,
+                        'othermin' => $o->b_min,
+                        'othermax' => $o->b_max,
+                    ];
+                } else if ($o->b_id === 0) {
+                    $other = (object)[
+                        'min' => $o->overlap_min,
+                        'max' => $o->overlap_max,
+                        'otherlabel' => $o->a_label,
+                        'othermin' => $o->a_min,
+                        'othermax' => $o->a_max,
+                    ];
+                } else {
+                    continue;
+                }
+                $messages[] = get_string('band:error:overlap', 'mod_scorecard', $other);
+            }
+
+            if (!empty($messages)) {
+                $errors['maxscore'] = implode("\n", $messages);
+            }
         }
 
         return $errors;
