@@ -215,6 +215,27 @@ function scorecard_renumber_items(int $scorecardid): void {
 }
 
 /**
+ * Whether the rating scale (scalemin / scalemax) can still be changed.
+ *
+ * Returns true when no attempts exist for the scorecard — the operator is
+ * free to revise the scale at this point. Returns false when one or more
+ * attempts exist, because changing scale values would silently re-score
+ * historical attempts (or, more likely, render their stored maxscore /
+ * percentage inconsistent with the new scale). SPEC §4.5: "Changing
+ * scalemin or scalemax is blocked once any attempt exists."
+ *
+ * Used by mod_form::validation() to surface a per-field error on scalemin
+ * and scalemax when the operator submits a changed value with attempts
+ * present.
+ *
+ * @param int $scorecardid
+ * @return bool True if the scale may be changed; false otherwise.
+ */
+function scorecard_scale_change_allowed(int $scorecardid): bool {
+    return scorecard_count_attempts($scorecardid) === 0;
+}
+
+/**
  * Add a new result band to a scorecard.
  *
  * Sortorder defaults to MAX(sortorder)+1 — the column is schema-required but

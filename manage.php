@@ -103,16 +103,26 @@ if ($tab === 'items') {
             $data->highlabel = (string)($data->highlabel ?? '');
             $data->visible = !empty($data->visible) ? 1 : 0;
 
+            $notifytype = \core\output\notification::NOTIFY_SUCCESS;
             if ($action === 'add') {
                 $data->scorecardid = $scorecard->id;
                 scorecard_add_item($data);
-                $msg = get_string('item:notify:added', 'mod_scorecard');
+                if (scorecard_count_attempts((int)$scorecard->id) > 0) {
+                    // SPEC §4.5: adding new items after attempts exist is allowed,
+                    // but the teacher must be warned — historical attempts won't
+                    // include the new item and their stored maxscore will look
+                    // lower than current attempts.
+                    $msg = get_string('item:notify:added_with_attempts', 'mod_scorecard');
+                    $notifytype = \core\output\notification::NOTIFY_WARNING;
+                } else {
+                    $msg = get_string('item:notify:added', 'mod_scorecard');
+                }
             } else {
                 $data->id = $itemid;
                 scorecard_update_item($data);
                 $msg = get_string('item:notify:updated', 'mod_scorecard');
             }
-            redirect($tabbaseurl, $msg, null, \core\output\notification::NOTIFY_SUCCESS);
+            redirect($tabbaseurl, $msg, null, $notifytype);
         }
     }
 }

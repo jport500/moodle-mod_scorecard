@@ -25,6 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 require_once($CFG->dirroot . '/course/moodleform_mod.php');
+require_once($CFG->dirroot . '/mod/scorecard/locallib.php');
 
 /**
  * mod_scorecard activity settings form.
@@ -165,10 +166,31 @@ class mod_scorecard_mod_form extends moodleform_mod {
      * @return array Errors keyed by field name.
      */
     public function validation($data, $files) {
+        global $DB;
         $errors = parent::validation($data, $files);
 
         if (isset($data['scalemin'], $data['scalemax']) && (int)$data['scalemin'] >= (int)$data['scalemax']) {
             $errors['scalemax'] = get_string('error:minmaxinvalid', 'mod_scorecard');
+        }
+
+        // Scale lock: SPEC §4.5 forbids scalemin/scalemax change once any
+        // attempt exists. Only checked when editing an existing instance —
+        // a new instance has no attempts by definition.
+        if (!empty($this->_instance) && isset($data['scalemin'], $data['scalemax'])) {
+            if (!scorecard_scale_change_allowed((int)$this->_instance)) {
+                $current = $DB->get_record(
+                    'scorecard',
+                    ['id' => $this->_instance],
+                    'scalemin, scalemax',
+                    MUST_EXIST
+                );
+                if ((int)$data['scalemin'] !== (int)$current->scalemin) {
+                    $errors['scalemin'] = get_string('error:scalechangeblocked', 'mod_scorecard');
+                }
+                if ((int)$data['scalemax'] !== (int)$current->scalemax) {
+                    $errors['scalemax'] = get_string('error:scalechangeblocked', 'mod_scorecard');
+                }
+            }
         }
 
         return $errors;
