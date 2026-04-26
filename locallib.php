@@ -478,3 +478,105 @@ function scorecard_compute_band_coverage(
         'itemcount' => $itemcount,
     ];
 }
+
+/**
+ * Compute the data for a scorecard attempt: total, max, percentage, matched band, snapshots.
+ *
+ * Pure function -- does not touch the database. Caller fetches scorecard, items
+ * (visible non-deleted), responses, and bands (deleted=0, pre-sorted by minscore
+ * ASC then id ASC), then invokes this with well-formed inputs. Used by
+ * submit.php in 3.3 and by the report layer in Phase 4 ("what would this
+ * attempt have scored under current config?").
+ *
+ * Required $scorecard fields: scalemin (int), scalemax (int), fallbackmessage
+ * (string), fallbackmessageformat (int). Other fields on the row are ignored.
+ * Missing required fields are a caller bug, not the engine's defensive
+ * responsibility.
+ *
+ * Bands array contract: pre-sorted by minscore ASC, id ASC. Engine iterates
+ * as-given and the first band whose [minscore, maxscore] inclusive range
+ * contains totalscore wins. Engine does NOT re-sort the input. Phase 2.4's
+ * coverage validation prevents shared-boundary and equal-minscore states from
+ * ever being saved, but the engine remains deterministic if a malformed
+ * scorecard reaches it (e.g., backup restore, direct DB edit).
+ *
+ * Responses array contract: itemid => integer value. Responses for itemids
+ * not present in $items are silently ignored from totalscore (audit-only;
+ * those rows are written by the submit handler for historical fidelity but
+ * do not contribute to scoring).
+ *
+ * @param stdClass $scorecard Scorecard config (scalemin, scalemax, fallbackmessage, fallbackmessageformat required).
+ * @param array $items Visible non-deleted items keyed by id.
+ * @param array $responses Map of itemid => int response value.
+ * @param array $bands Bands sorted by minscore ASC, id ASC.
+ * @return array {
+ *     totalscore: int,
+ *     maxscore: int,
+ *     percentage: float (rounded to 2dp),
+ *     bandid: int|null (null on fallback),
+ *     bandlabelsnapshot: string|null (null on fallback),
+ *     bandmessagesnapshot: string (matched band message via (string) cast, or fallbackmessage on no-match),
+ *     bandmessageformatsnapshot: int (matched band format, or fallbackmessageformat on no-match),
+ * }
+ * @throws \coding_exception When $items is empty (maxscore would be 0) or any in-set response is outside [scalemin, scalemax].
+ */
+function scorecard_compute_attempt_data(
+    stdClass $scorecard,
+    array $items,
+    array $responses,
+    array $bands
+): array {
+    $scalemin = (int)$scorecard->scalemin;
+    $scalemax = (int)$scorecard->scalemax;
+    $itemcount = count($items);
+
+    if ($itemcount === 0) {
+        throw new \coding_exception(
+            'scorecard_compute_attempt_data: $items is empty (maxscore would be zero); '
+            . 'submit handler must reject empty scorecards via the lifecycle gate before invoking the engine.'
+        );
+    }
+
+    $totalscore = 0;
+    foreach ($responses as $itemid => $value) {
+        if (!array_key_exists($itemid, $items)) {
+            continue;
+        }
+        $value = (int)$value;
+        if ($value < $scalemin || $value > $scalemax) {
+            throw new \coding_exception(
+                "scorecard_compute_attempt_data: response value {$value} for item {$itemid} "
+                . "is outside scale [{$scalemin}, {$scalemax}]; submit handler must validate before invoking the engine."
+            );
+        }
+        $totalscore += $value;
+    }
+
+    $maxscore = $itemcount * $scalemax;
+    $percentage = round(($totalscore / $maxscore) * 100, 2);
+
+    $bandid = null;
+    $bandlabelsnapshot = null;
+    $bandmessagesnapshot = (string)$scorecard->fallbackmessage;
+    $bandmessageformatsnapshot = (int)$scorecard->fallbackmessageformat;
+
+    foreach ($bands as $band) {
+        if ($totalscore >= (int)$band->minscore && $totalscore <= (int)$band->maxscore) {
+            $bandid = (int)$band->id;
+            $bandlabelsnapshot = (string)$band->label;
+            $bandmessagesnapshot = (string)$band->message;
+            $bandmessageformatsnapshot = (int)$band->messageformat;
+            break;
+        }
+    }
+
+    return [
+        'totalscore' => $totalscore,
+        'maxscore' => $maxscore,
+        'percentage' => $percentage,
+        'bandid' => $bandid,
+        'bandlabelsnapshot' => $bandlabelsnapshot,
+        'bandmessagesnapshot' => $bandmessagesnapshot,
+        'bandmessageformatsnapshot' => $bandmessageformatsnapshot,
+    ];
+}
