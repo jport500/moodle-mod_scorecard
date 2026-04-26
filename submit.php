@@ -17,12 +17,14 @@
 /**
  * Learner submission endpoint for mod_scorecard.
  *
- * 3.1 stub: validates the request shape (sesskey, cmid, capability) and
- * renders a placeholder explaining that submission handling lands in 3.3.
- * Confirms the form's POST target is wired correctly without writing any
- * data. The full submit handler — validation, scoring engine call,
- * single-transaction attempt + responses + snapshot write, redirect to
- * view.php — replaces this body in 3.3.
+ * Owns the HTTP boundary: authentication, sesskey, and capability. Validation,
+ * scoring, and persistence live in scorecard_handle_submission() so PHPUnit
+ * can exercise them without simulating an HTTP request.
+ *
+ * On 'submitted' or 'duplicate_attempt' the user is redirected to view.php,
+ * which renders the result-placeholder branch (3.4 will replace it with the
+ * real result page). On 'validation_failed' the form is re-rendered inline
+ * with $preselected to retain selections and $errors for inline messaging.
  *
  * @package    mod_scorecard
  * @copyright  2026 LMS Light
@@ -30,6 +32,7 @@
  */
 
 require_once(__DIR__ . '/../../config.php');
+require_once($CFG->dirroot . '/mod/scorecard/locallib.php');
 
 $cmid = required_param('cmid', PARAM_INT);
 
@@ -42,22 +45,44 @@ require_sesskey();
 $context = context_module::instance($cm->id);
 require_capability('mod/scorecard:submit', $context);
 
+$viewurl = new moodle_url('/mod/scorecard/view.php', ['id' => $cm->id]);
+
+$rawresponses = optional_param_array('response', [], PARAM_RAW);
+$rawresponses = is_array($rawresponses) ? $rawresponses : [];
+
+$result = scorecard_handle_submission($scorecard, $cm, (int)$USER->id, $rawresponses);
+
+if ($result['status'] === 'submitted' || $result['status'] === 'duplicate_attempt') {
+    redirect($viewurl);
+}
+
+// Status is 'validation_failed' -- re-render the form inline with errors and preselections.
 $PAGE->set_url('/mod/scorecard/submit.php');
 $PAGE->set_title(format_string($scorecard->name));
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_context($context);
 
+/** @var \mod_scorecard\output\renderer $renderer */
+$renderer = $PAGE->get_renderer('mod_scorecard');
+$visibleitems = scorecard_get_visible_items((int)$scorecard->id);
+
 echo $OUTPUT->header();
 echo $OUTPUT->heading(format_string($scorecard->name));
-echo $OUTPUT->box(
-    get_string('submit:placeholder', 'mod_scorecard'),
-    'generalbox alert alert-info'
-);
-echo html_writer::div(
-    html_writer::link(
-        new moodle_url('/mod/scorecard/view.php', ['id' => $cm->id]),
-        get_string('submit:back', 'mod_scorecard')
-    ),
-    'mt-3'
-);
+
+if (isset($result['errors']['_form'])) {
+    echo $OUTPUT->notification($result['errors']['_form'], \core\output\notification::NOTIFY_ERROR);
+}
+
+if (!empty($visibleitems)) {
+    echo $renderer->render_learner_form(
+        $scorecard,
+        $visibleitems,
+        (int)$cm->id,
+        $result['preselected'],
+        $result['errors']
+    );
+} else {
+    echo $renderer->render_learner_no_items();
+}
+
 echo $OUTPUT->footer();

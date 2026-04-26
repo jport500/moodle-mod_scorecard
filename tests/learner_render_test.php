@@ -352,7 +352,7 @@ final class learner_render_test extends \advanced_testcase {
      * Phase 3 lang strings introduced in 3.1 resolve cleanly.
      */
     public function test_phase3_lang_strings_resolve(): void {
-        $keys = ['submit:button', 'submit:placeholder', 'submit:back', 'result:placeholder'];
+        $keys = ['submit:button', 'submit:back', 'result:placeholder'];
         foreach ($keys as $key) {
             $value = get_string($key, 'mod_scorecard');
             $this->assertStringNotContainsString('[[', $value, "Lang key $key did not resolve");

@@ -96,6 +96,26 @@ function scorecard_user_has_attempt(int $scorecardid, int $userid): bool {
 }
 
 /**
+ * Count attempts for a (scorecard, user) pair, used for attemptnumber assignment.
+ *
+ * Symmetrical with scorecard_count_attempts (which counts across users).
+ * Submit handler in 3.3 reads this immediately before INSERT to set
+ * attemptnumber = count + 1; Phase 4 reports use it as a per-user attempt
+ * total without loading the rows.
+ *
+ * @param int $scorecardid
+ * @param int $userid
+ * @return int
+ */
+function scorecard_count_user_attempts(int $scorecardid, int $userid): int {
+    global $DB;
+    return (int)$DB->count_records(
+        'scorecard_attempts',
+        ['scorecardid' => $scorecardid, 'userid' => $userid]
+    );
+}
+
+/**
  * Add a new scored prompt to a scorecard.
  *
  * Sortorder defaults to MAX(sortorder)+1 across all rows (visible, hidden,
@@ -578,5 +598,200 @@ function scorecard_compute_attempt_data(
         'bandlabelsnapshot' => $bandlabelsnapshot,
         'bandmessagesnapshot' => $bandmessagesnapshot,
         'bandmessageformatsnapshot' => $bandmessageformatsnapshot,
+    ];
+}
+
+/**
+ * Validate, score, and persist a learner submission inside a single transaction.
+ *
+ * The HTTP entry point at /mod/scorecard/submit.php owns the auth boundary
+ * (require_login + require_sesskey + require_capability); this function
+ * trusts the caller has done that and focuses on validation, scoring, and
+ * persistence. PHPUnit calls it directly with synthesized inputs.
+ *
+ * Validation order (matches the locked 3.3 contract):
+ *   1. Itemid-subset: every key in $rawresponses must belong to the scorecard's
+ *      item set (any state). Catches POST injection. Form-level reject on fail.
+ *   2. Lifecycle gate: re-fetch visible items at submit time. Empty set means
+ *      every item was soft-deleted between render and submit; form-level reject.
+ *   3. Per-item: every visible item must have a response (missing -> per-fieldset
+ *      error), and every response for a visible item must be a numeric int in
+ *      [scalemin, scalemax] (out-of-range -> per-fieldset error). Steps 3a (missing)
+ *      and 3b (out-of-range) collect together so the user sees every problem on
+ *      one re-render.
+ *   4. Duplicate: if the user already has an attempt and allowretakes is off,
+ *      short-circuit with status='duplicate_attempt' for a silent redirect.
+ *
+ * Audit-write semantics (locked option B): response rows are written for every
+ * itemid in $rawresponses that belongs to the scorecard, including itemids
+ * soft-deleted between render and submit. Engine sums only over visible items;
+ * orphan responses are preserved in scorecard_responses for Phase 4 reports.
+ *
+ * Gradebook: 3.3 does not call grade_update(). Phase 5a wires that in inside
+ * this same handler, after commit, before the event trigger.
+ *
+ * @param stdClass $scorecard Scorecard row (must include id, scalemin, scalemax,
+ *                            allowretakes, fallbackmessage, fallbackmessageformat).
+ * @param stdClass $cm Course module row (used for context + URL in the event).
+ * @param int $userid Submitting user id.
+ * @param array $rawresponses Map of itemid => raw value (typically from $_POST['response']).
+ * @return array {
+ *     status: 'submitted'|'validation_failed'|'duplicate_attempt',
+ *     errors: array<int|string, string> ([itemid => msg] for per-fieldset; ['_form' => msg] for form-level),
+ *     attemptid: int|null,
+ *     preselected: array<int, mixed> (echo-back of rawresponses on validation_failed),
+ * }
+ */
+function scorecard_handle_submission(
+    stdClass $scorecard,
+    stdClass $cm,
+    int $userid,
+    array $rawresponses
+): array {
+    global $DB;
+
+    $scorecardid = (int)$scorecard->id;
+    $scalemin = (int)$scorecard->scalemin;
+    $scalemax = (int)$scorecard->scalemax;
+
+    // Step 1: itemid-subset (POST-injection guard).
+    $allitems = $DB->get_records(
+        'scorecard_items',
+        ['scorecardid' => $scorecardid],
+        '',
+        'id'
+    );
+    foreach (array_keys($rawresponses) as $rid) {
+        if (!isset($allitems[(int)$rid])) {
+            return [
+                'status' => 'validation_failed',
+                'errors' => ['_form' => get_string('submit:error:invaliditem', 'mod_scorecard')],
+                'attemptid' => null,
+                'preselected' => $rawresponses,
+            ];
+        }
+    }
+
+    // Step 2: lifecycle gate.
+    $visibleitems = scorecard_get_visible_items($scorecardid);
+    if (empty($visibleitems)) {
+        return [
+            'status' => 'validation_failed',
+            'errors' => ['_form' => get_string('submit:error:noitems', 'mod_scorecard')],
+            'attemptid' => null,
+            'preselected' => $rawresponses,
+        ];
+    }
+
+    // Step 3: per-item missing + out-of-range, collected together.
+    $errors = [];
+    $cleanresponses = [];
+    foreach ($visibleitems as $item) {
+        $itemid = (int)$item->id;
+        if (!array_key_exists($itemid, $rawresponses)) {
+            $errors[$itemid] = get_string('submit:error:missing', 'mod_scorecard');
+            continue;
+        }
+        $raw = $rawresponses[$itemid];
+        if (!is_numeric($raw)) {
+            $errors[$itemid] = get_string('submit:error:outofrange', 'mod_scorecard');
+            continue;
+        }
+        $intval = (int)$raw;
+        if ($intval < $scalemin || $intval > $scalemax) {
+            $errors[$itemid] = get_string('submit:error:outofrange', 'mod_scorecard');
+            continue;
+        }
+        $cleanresponses[$itemid] = $intval;
+    }
+    if (!empty($errors)) {
+        return [
+            'status' => 'validation_failed',
+            'errors' => $errors,
+            'attemptid' => null,
+            'preselected' => $rawresponses,
+        ];
+    }
+
+    // Step 4: duplicate attempt (retakes off).
+    $existingcount = scorecard_count_user_attempts($scorecardid, $userid);
+    if ($existingcount > 0 && empty($scorecard->allowretakes)) {
+        return [
+            'status' => 'duplicate_attempt',
+            'errors' => [],
+            'attemptid' => null,
+            'preselected' => [],
+        ];
+    }
+
+    // Validation passed. Compute score, then write attempt + responses in a transaction.
+    $bands = $DB->get_records(
+        'scorecard_bands',
+        ['scorecardid' => $scorecardid, 'deleted' => 0],
+        'minscore ASC, id ASC'
+    );
+    $enginedata = scorecard_compute_attempt_data($scorecard, $visibleitems, $cleanresponses, $bands);
+
+    $now = time();
+    $transaction = $DB->start_delegated_transaction();
+    try {
+        $attemptid = $DB->insert_record('scorecard_attempts', (object)[
+            'scorecardid' => $scorecardid,
+            'userid' => $userid,
+            'attemptnumber' => $existingcount + 1,
+            'totalscore' => $enginedata['totalscore'],
+            'maxscore' => $enginedata['maxscore'],
+            'percentage' => $enginedata['percentage'],
+            'bandid' => $enginedata['bandid'],
+            'bandlabelsnapshot' => $enginedata['bandlabelsnapshot'],
+            'bandmessagesnapshot' => $enginedata['bandmessagesnapshot'],
+            'bandmessageformatsnapshot' => $enginedata['bandmessageformatsnapshot'],
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+
+        // Audit-write: every itemid in $rawresponses that belongs to the scorecard.
+        // Includes soft-deleted-between-render-and-submit items so Phase 4 can
+        // show that the item was answered before being removed.
+        foreach ($rawresponses as $itemid => $value) {
+            $itemid = (int)$itemid;
+            if (!isset($allitems[$itemid])) {
+                continue;
+            }
+            $DB->insert_record('scorecard_responses', (object)[
+                'attemptid' => $attemptid,
+                'itemid' => $itemid,
+                'responsevalue' => is_numeric($value) ? (int)$value : 0,
+                'timecreated' => $now,
+            ]);
+        }
+
+        $transaction->allow_commit();
+    } catch (\Throwable $e) {
+        $transaction->rollback($e);
+    }
+
+    // Cache invalidation: scorecard_count_attempts caches the per-scorecard total.
+    cache::make('mod_scorecard', 'attemptcounts')->delete((string)$scorecardid);
+
+    // Event fires after commit, before return -- atomicity argument: subscribers
+    // observing this event are guaranteed the rows are persisted.
+    \mod_scorecard\event\attempt_submitted::create([
+        'context' => \context_module::instance((int)$cm->id),
+        'objectid' => $attemptid,
+        'userid' => $userid,
+        'relateduserid' => $userid,
+        'other' => [
+            'totalscore' => $enginedata['totalscore'],
+            'maxscore' => $enginedata['maxscore'],
+            'bandid' => $enginedata['bandid'],
+        ],
+    ])->trigger();
+
+    return [
+        'status' => 'submitted',
+        'errors' => [],
+        'attemptid' => (int)$attemptid,
+        'preselected' => [],
     ];
 }
