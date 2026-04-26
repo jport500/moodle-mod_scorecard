@@ -255,6 +255,228 @@ class renderer extends plugin_renderer_base {
     }
 
     /**
+     * Render the learner submission form.
+     *
+     * One fieldset per item (prompt as legend), radio inputs from scalemin to
+     * scalemax inclusive with name="response[itemid]" so PHP's $_POST arrives
+     * as an associative array keyed by item id. Anchor labels render in spans
+     * adjacent to the leftmost / rightmost radios; aria-describedby on those
+     * radios pairs anchor text with the value for screen readers (SPEC §10.1
+     * accessibility floor). Item iteration order matches the manage screen
+     * (sortorder ASC) so a teacher debugging "why does my form look wrong"
+     * sees the same order in both places.
+     *
+     * Form posts to submit.php (clean URL, cmid in body as a hidden field —
+     * not in the query string). Sesskey hidden field added by Moodle's
+     * \html_writer ::input or directly. On validation failure, the submit
+     * handler re-renders this method with $preselected (itemid → value, to
+     * mark the matching radio checked) and $errors (itemid → error string,
+     * surfaced inline above the radio row of the offending fieldset). Both
+     * default null for the first render.
+     *
+     * @param \stdClass $scorecard Scorecard row (scalemin, scalemax, lowlabel, highlabel).
+     * @param array $items Visible non-deleted items keyed by id, sorted by sortorder ASC.
+     * @param int $cmid Course module id (target of submit.php's coursemodule_from_id lookup).
+     * @param array|null $preselected Optional itemid → value to pre-check the matching radio.
+     * @param array|null $errors Optional itemid → error string for inline per-fieldset errors.
+     * @return string Rendered HTML form.
+     */
+    public function render_learner_form(
+        \stdClass $scorecard,
+        array $items,
+        int $cmid,
+        ?array $preselected = null,
+        ?array $errors = null
+    ): string {
+        $scalemin = (int)$scorecard->scalemin;
+        $scalemax = (int)$scorecard->scalemax;
+        $globallow = (string)($scorecard->lowlabel ?? '');
+        $globalhigh = (string)($scorecard->highlabel ?? '');
+        $preselected = $preselected ?? [];
+        $errors = $errors ?? [];
+
+        $fieldsets = [];
+        foreach ($items as $item) {
+            $fieldsets[] = $this->render_learner_form_item(
+                $item,
+                $scalemin,
+                $scalemax,
+                $globallow,
+                $globalhigh,
+                $preselected[$item->id] ?? null,
+                $errors[$item->id] ?? null
+            );
+        }
+
+        $hidden = html_writer::empty_tag('input', [
+            'type' => 'hidden',
+            'name' => 'cmid',
+            'value' => $cmid,
+        ]) . html_writer::empty_tag('input', [
+            'type' => 'hidden',
+            'name' => 'sesskey',
+            'value' => sesskey(),
+        ]);
+
+        $submit = html_writer::tag(
+            'button',
+            get_string('submit:button', 'mod_scorecard'),
+            ['type' => 'submit', 'class' => 'btn btn-primary mt-3']
+        );
+
+        return html_writer::tag(
+            'form',
+            $hidden . implode('', $fieldsets) . $submit,
+            [
+                'method' => 'post',
+                'action' => (new moodle_url('/mod/scorecard/submit.php'))->out(false),
+                'class' => 'scorecard-learner-form',
+            ]
+        );
+    }
+
+    /**
+     * Render a single item fieldset for the learner form.
+     *
+     * Split out from render_learner_form for readability and to keep the
+     * fieldset-level accessibility markup in one place: legend = prompt,
+     * anchor spans hold ids referenced by aria-describedby on the leftmost
+     * and rightmost radios, error notice rendered above the radio row when
+     * present.
+     *
+     * @param \stdClass $item Item row (id, prompt, promptformat, lowlabel, highlabel).
+     * @param int $scalemin Inclusive minimum radio value.
+     * @param int $scalemax Inclusive maximum radio value.
+     * @param string $globallow Activity-level low anchor (used when item-level is empty).
+     * @param string $globalhigh Activity-level high anchor (used when item-level is empty).
+     * @param int|string|null $selectedvalue Value to mark as checked, or null for none.
+     * @param string|null $error Error string to render above the radio row, or null.
+     * @return string Rendered HTML fieldset.
+     */
+    private function render_learner_form_item(
+        \stdClass $item,
+        int $scalemin,
+        int $scalemax,
+        string $globallow,
+        string $globalhigh,
+        $selectedvalue,
+        ?string $error
+    ): string {
+        $itemid = (int)$item->id;
+        $low = $item->lowlabel !== null && $item->lowlabel !== '' ? (string)$item->lowlabel : $globallow;
+        $high = $item->highlabel !== null && $item->highlabel !== '' ? (string)$item->highlabel : $globalhigh;
+
+        $lowanchorid = "scorecard-anchor-low-{$itemid}";
+        $highanchorid = "scorecard-anchor-high-{$itemid}";
+
+        $legend = html_writer::tag(
+            'legend',
+            format_text($item->prompt, (int)$item->promptformat),
+            ['class' => 'scorecard-item-prompt']
+        );
+
+        $errorblock = '';
+        if ($error !== null && $error !== '') {
+            $errorblock = html_writer::div(
+                s($error),
+                'scorecard-item-error alert alert-danger py-1 px-2',
+                ['role' => 'alert']
+            );
+        }
+
+        $lowanchor = $low !== '' ? html_writer::span(
+            format_string($low),
+            'scorecard-anchor scorecard-anchor-low',
+            ['id' => $lowanchorid]
+        ) : '';
+        $highanchor = $high !== '' ? html_writer::span(
+            format_string($high),
+            'scorecard-anchor scorecard-anchor-high',
+            ['id' => $highanchorid]
+        ) : '';
+
+        $radios = [];
+        for ($value = $scalemin; $value <= $scalemax; $value++) {
+            $radioid = "scorecard-r-{$itemid}-" . ($value < 0 ? 'n' . abs($value) : (string)$value);
+            $attrs = [
+                'type' => 'radio',
+                'name' => "response[{$itemid}]",
+                'value' => (string)$value,
+                'id' => $radioid,
+                'class' => 'scorecard-radio-input',
+            ];
+            if ($selectedvalue !== null && (int)$selectedvalue === $value) {
+                $attrs['checked'] = 'checked';
+            }
+            $describedby = [];
+            if ($value === $scalemin && $lowanchor !== '') {
+                $describedby[] = $lowanchorid;
+            }
+            if ($value === $scalemax && $highanchor !== '') {
+                $describedby[] = $highanchorid;
+            }
+            if ($describedby) {
+                $attrs['aria-describedby'] = implode(' ', $describedby);
+            }
+            $radios[] = html_writer::tag(
+                'label',
+                html_writer::empty_tag('input', $attrs) .
+                    html_writer::span((string)$value, 'scorecard-radio-value'),
+                ['class' => 'scorecard-radio-label', 'for' => $radioid]
+            );
+        }
+
+        $radiorow = html_writer::div(
+            $lowanchor . html_writer::div(implode('', $radios), 'scorecard-radio-group') . $highanchor,
+            'scorecard-radio-row'
+        );
+
+        return html_writer::tag(
+            'fieldset',
+            $legend . $errorblock . $radiorow,
+            [
+                'class' => 'scorecard-item-fieldset',
+                'data-itemid' => (string)$itemid,
+            ]
+        );
+    }
+
+    /**
+     * Render the empty-state notice when the scorecard has no visible items.
+     *
+     * Used by view.php's learner branch when scorecard_get_visible_items()
+     * returns an empty array — typically because the teacher has not yet
+     * authored any items, or all items are hidden as drafts. Distinct from
+     * the manager-facing empty state (which links to the manage screen).
+     *
+     * @return string Rendered HTML notice.
+     */
+    public function render_learner_no_items(): string {
+        return html_writer::div(
+            get_string('view:noitems_learner', 'mod_scorecard'),
+            'scorecard-noitems alert alert-info'
+        );
+    }
+
+    /**
+     * Render the placeholder shown when an attempt exists but the result
+     * surface is not built yet.
+     *
+     * Used by view.php's learner branch in 3.1 for the "attempt exists,
+     * retakes off" path so the branching logic can be smoke-tested without
+     * the full result page (which lands in 3.4). Replaced by a real
+     * render_result_page() call in 3.4.
+     *
+     * @return string Rendered HTML placeholder.
+     */
+    public function render_learner_result_placeholder(): string {
+        return html_writer::div(
+            get_string('result:placeholder', 'mod_scorecard'),
+            'scorecard-result-placeholder alert alert-info'
+        );
+    }
+
+    /**
      * Render the bands list with empty-state and "Add a band" button.
      *
      * Bands display by minscore ASC (natural numeric order). Soft-deleted bands

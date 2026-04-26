@@ -56,6 +56,46 @@ function scorecard_count_attempts(int $scorecardid): int {
 }
 
 /**
+ * Fetch the visible non-deleted items of a scorecard, in display order.
+ *
+ * Single source of truth for the item set the learner sees on the submission
+ * form. Reused by the scoring engine in 3.2 to enumerate scorable items at
+ * submit time, by the result-page item summary in 3.4, and by the lifecycle
+ * gate at submit time in 3.3 (which re-queries this set immediately before
+ * writing the attempt to detect items soft-deleted between render and submit).
+ *
+ * @param int $scorecardid
+ * @return array Item rows keyed by id, sorted by sortorder ASC.
+ */
+function scorecard_get_visible_items(int $scorecardid): array {
+    global $DB;
+    return $DB->get_records(
+        'scorecard_items',
+        ['scorecardid' => $scorecardid, 'deleted' => 0, 'visible' => 1],
+        'sortorder ASC'
+    );
+}
+
+/**
+ * Whether the given user has any attempt on the given scorecard.
+ *
+ * Used by view.php's learner branching to decide between form render and
+ * result render. Cheap existence check; no need to load the full attempt
+ * row when the caller only needs a yes/no.
+ *
+ * @param int $scorecardid
+ * @param int $userid
+ * @return bool
+ */
+function scorecard_user_has_attempt(int $scorecardid, int $userid): bool {
+    global $DB;
+    return $DB->record_exists(
+        'scorecard_attempts',
+        ['scorecardid' => $scorecardid, 'userid' => $userid]
+    );
+}
+
+/**
  * Add a new scored prompt to a scorecard.
  *
  * Sortorder defaults to MAX(sortorder)+1 across all rows (visible, hidden,

@@ -17,9 +17,11 @@
 /**
  * View page for mod_scorecard.
  *
- * Phase 1: renders activity title, intro, and a role-branched placeholder.
- * Phases 2 and 3 replace the placeholder with the manage UI and learner
- * submission form respectively.
+ * Branches on capability:
+ * - :submit (learner) → form / result depending on attempt existence and
+ *   retakes setting (3.1 scaffolds the form path; result page lands in 3.4).
+ * - :manage (teacher) without :submit → manage-link placeholder (Phase 1).
+ * - other → learner not-ready placeholder (Phase 1).
  *
  * @package    mod_scorecard
  * @copyright  2026 LMS Light
@@ -27,6 +29,7 @@
  */
 
 require_once(__DIR__ . '/../../config.php');
+require_once(__DIR__ . '/locallib.php');
 
 $id = optional_param('id', 0, PARAM_INT);
 $s = optional_param('s', 0, PARAM_INT);
@@ -59,7 +62,24 @@ if (!empty($scorecard->intro)) {
     echo $OUTPUT->box(format_module_intro('scorecard', $scorecard, $cm->id), 'generalbox', 'intro');
 }
 
-if (has_capability('mod/scorecard:manage', $context)) {
+if (has_capability('mod/scorecard:submit', $context)) {
+    /** @var \mod_scorecard\output\renderer $renderer */
+    $renderer = $PAGE->get_renderer('mod_scorecard');
+
+    $items = scorecard_get_visible_items((int)$scorecard->id);
+
+    if (!$items) {
+        echo $renderer->render_learner_no_items();
+    } else if (scorecard_user_has_attempt((int)$scorecard->id, (int)$USER->id)) {
+        if (empty($scorecard->allowretakes)) {
+            echo $renderer->render_learner_result_placeholder();
+        } else {
+            echo $renderer->render_learner_form($scorecard, $items, (int)$cm->id);
+        }
+    } else {
+        echo $renderer->render_learner_form($scorecard, $items, (int)$cm->id);
+    }
+} else if (has_capability('mod/scorecard:manage', $context)) {
     $manageurl = new moodle_url('/mod/scorecard/manage.php', ['id' => $cm->id]);
     $body = get_string('view:noitems_manager', 'mod_scorecard') . html_writer::empty_tag('br') .
         html_writer::link($manageurl, get_string('view:manageitemslink', 'mod_scorecard'));
