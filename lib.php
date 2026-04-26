@@ -25,9 +25,10 @@
 /**
  * Declare which Moodle activity-module features mod_scorecard supports.
  *
- * Phase 1 declares only features actually implemented in this skeleton.
- * Backup, completion, and gradebook flags are explicitly false; they flip
- * to true in Phases 1.4, 5a, 5b respectively as their implementations land.
+ * Phase-honest declarations: features flip to true as their implementations
+ * land. Phase 1.4 enables FEATURE_BACKUP_MOODLE2 (settings-only backup;
+ * nested item/band/attempt/response capture lands in Phase 5b). Completion
+ * and gradebook flags flip in Phase 5a.
  *
  * @param string $feature FEATURE_xx constant.
  * @return mixed True/false/feature constant; null for unknown features.
@@ -39,7 +40,7 @@ function scorecard_supports($feature) {
         FEATURE_GROUPS => true,
         FEATURE_GROUPINGS => true,
         FEATURE_MOD_PURPOSE => MOD_PURPOSE_ASSESSMENT,
-        FEATURE_BACKUP_MOODLE2 => false,
+        FEATURE_BACKUP_MOODLE2 => true,
         FEATURE_COMPLETION_TRACKS_VIEWS => false,
         FEATURE_COMPLETION_HAS_RULES => false,
         FEATURE_GRADE_HAS_GRADE => false,
