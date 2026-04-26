@@ -12,17 +12,17 @@ total score plus interpretation.
 
 ## Status
 
-**v0.1.0 — Phase 1 (Skeleton) shipped 2026-04-25.** This is an alpha
-release. The plugin installs, registers a Scorecard activity in the
-chooser, persists the activity-level settings, and declares the data
-model. **It is not yet user-facing**: item authoring, learner
-submission, scoring, reporting, gradebook integration, and full
-backup/restore land in subsequent phases.
+**v0.2.0 — Phase 2 (Authoring) shipped 2026-04-26.** Teachers can now
+configure a scorecard end-to-end: items, bands, coverage validation,
+and lifecycle rules for editing after attempts start. The plugin
+remains MATURITY_ALPHA — learner-facing behaviour (submission,
+scoring, results) lands in Phase 3, so the activity is not yet
+ready for end-user rollout.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| 1 — Skeleton | Install schema, capabilities, mod_form, view, privacy provider scaffold, settings-only backup/restore, skeleton tests | **shipped v0.1.0** |
-| 2 — Authoring | Manage screen with Items + Bands tabs, CRUD, soft-delete, reorder, band coverage validation | planned |
+| 1 — Skeleton | Install schema, capabilities, mod_form, view, privacy provider scaffold, settings-only backup/restore, skeleton tests | shipped v0.1.0 |
+| 2 — Authoring | Manage screen with Items + Bands tabs, CRUD, soft-delete, reorder, band coverage validation, lifecycle gate | **shipped v0.2.0** |
 | 3 — Learner submission | Submission form, validation, attempt + response save, scoring engine, band matching with snapshotting, result page | planned |
 | 4 — Reporting | Reports tab, expandable detail, CSV export, group-mode awareness | planned |
 | 5a — Completion + gradebook | Activity completion, gradebook integration, per-tenant theming hooks | planned |
@@ -56,7 +56,82 @@ exposes the full settings table:
 - Gradebook integration toggle (gradebook write happens in Phase 5a)
 - Standard Moodle activity options (visibility, group mode, etc.)
 
-Item authoring and result-band configuration ship in Phase 2.
+Item authoring and result-band configuration ship in Phase 2 — see
+the **Authoring** section below.
+
+## Authoring
+
+The Manage screen at `manage.php?id=<cmid>` lets a teacher define the
+scored prompts and result bands that drive a scorecard. Open it from
+the activity view's "Add items and result bands" link, visible to
+users with `mod/scorecard:manage`. Non-managers are redirected to the
+activity view with a clear error notice.
+
+### Items tab
+
+Each item is a single scored prompt — typically one sentence. Add an
+item with the **Add an item** button and fill in:
+
+- **Prompt** (required). The question or statement the learner
+  responds to. Rich-text editor; one prompt per fieldset on the
+  learner submission page (Phase 3).
+- **Low / high anchor labels** (optional). Override the activity-level
+  scale anchors for this specific item — useful when a particular
+  prompt's "1" or "10" should read differently from the rest.
+- **Visible to learners**. Uncheck to keep an item as a draft (hidden
+  from learners, excluded from scoring) while you continue building.
+
+Reorder items with the up / down arrows on the list. Edit and delete
+actions live to the right of each row.
+
+### Bands tab
+
+A result band maps a range of total scores to a label and an
+interpretive message. Bands display by minimum score ascending — the
+natural numeric order learners encounter at score time.
+
+- **Minimum / maximum score**. Inclusive bounds. Both required.
+- **Label** (required). Short result name like "Strong" or
+  "Concerning". Shown alongside the learner's total at result time.
+- **Result message**. Optional rich-text interpretation rendered under
+  the label on the result page.
+
+The Bands tab surfaces coverage problems before attempts start
+landing:
+
+- **Overlap blocks save.** Two bands covering the same score (e.g.
+  5–20 and 15–25 both covering 15–20) produce an inline error on the
+  offending field, naming the sibling and the overlap range. Editing
+  a band excludes itself from the check, so re-saving a band without
+  changes never trips this.
+- **Gap warns.** Score ranges no band covers appear as a yellow
+  warning at the top of the list ("Uncovered score ranges: 21–29,
+  41–50"). Gaps do not block save — uncovered scores fall through to
+  the per-instance fallback message set on the activity edit page.
+- **No items yet.** Before any visible items exist, gap detection is
+  suppressed and the tab nudges you to add items first; the
+  theoretical score range is undefined without items.
+
+### Lifecycle: what changes after the first attempt
+
+Once a learner submits an attempt (Phase 3), some edits become locked
+or warned to keep historical attempt scoring stable:
+
+- **Items.** Editing prompt and anchors stays available. Delete
+  becomes soft-delete: the row is retained with a "(deleted)" badge
+  and strikethrough so historical attempt detail (Phase 4 reports)
+  can still resolve the prompt text. Adding new items is allowed,
+  but the post-save notification warns that historical attempts will
+  not include the new item.
+- **Bands.** Editing label and message stays available. Delete
+  becomes soft-delete (same reason as items).
+- **Activity scale.** `scalemin` / `scalemax` are locked. The activity
+  edit form rejects scale changes with a pointer to duplicating the
+  activity if a different scale is needed.
+
+### Reports tab
+
+Reports land in Phase 4 — the tab is a placeholder for now.
 
 ## Running tests
 
@@ -66,11 +141,16 @@ PHPUnit init (one-time per Moodle instance):
 ddev exec php /var/www/html/moodle/public/admin/tool/phpunit/cli/init.php
 ```
 
-Run mod_scorecard tests via direct path (the canonical invocation that
-works regardless of Moodle's phpunit.xml testsuite configuration):
+Run the full mod_scorecard suite via explicit file list:
 
 ```
-ddev exec bash -c 'cd /var/www/html/moodle && vendor/bin/phpunit public/mod/scorecard/tests/'
+ddev exec bash -c 'cd /var/www/html/moodle && vendor/bin/phpunit \
+    public/mod/scorecard/tests/lib_test.php \
+    public/mod/scorecard/tests/db_install_test.php \
+    public/mod/scorecard/tests/locallib_test.php \
+    public/mod/scorecard/tests/locallib_band_test.php \
+    public/mod/scorecard/tests/locallib_band_coverage_test.php \
+    public/mod/scorecard/tests/lifecycle_test.php'
 ```
 
 Or run an individual test file:
@@ -79,11 +159,14 @@ Or run an individual test file:
 ddev exec bash -c 'cd /var/www/html/moodle && vendor/bin/phpunit public/mod/scorecard/tests/lib_test.php'
 ```
 
-> **Note on `--filter`.** `vendor/bin/phpunit --filter mod_scorecard ...`
-> returns "No tests executed!" because Moodle's bundled `phpunit.xml`
-> testsuite paths cover core + standard mod plugins only; contrib
-> plugins' `tests/` directories must be addressed by direct path. Use
-> the path-based invocation above.
+> **Note on the directory-path form.** `vendor/bin/phpunit
+> public/mod/scorecard/tests/` silently runs zero tests on Moodle 5.1
+> (returns "No tests executed!" with exit 0) — Moodle's bundled
+> `phpunit.xml` testsuite paths cover core + standard mod plugins only,
+> and PHPUnit 11's stricter testsuite resolution doesn't fall back
+> when a contrib directory is passed directly. Use the explicit file
+> list above; in CI, assert on the test-count line ("OK (N tests, M
+> assertions)"), not just exit code.
 
 Plugin-wide phpcs:
 
@@ -113,7 +196,8 @@ export, AI-assisted item generation).
 - **LMS Light portable lessons:** [`lms-light-docs/LESSONS.md`](https://github.com/jport500/lms-light-docs/blob/main/LESSONS.md)
   — process patterns and failure modes accumulated across plugin work.
 - **Specification:** [`docs/SPEC.md`](docs/SPEC.md) — current plugin
-  specification (v0.3 as of v0.1.0 release).
+  specification (v0.4 as of v0.2.0 release; sha256-verified against
+  the canonical raw URL on commit).
 - **Release notes:** [`CHANGES.md`](CHANGES.md).
 
 ## License
