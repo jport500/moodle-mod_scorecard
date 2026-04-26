@@ -324,9 +324,9 @@ final class learner_render_test extends \advanced_testcase {
     }
 
     /**
-     * Empty-state and result placeholder render the expected lang strings.
+     * Empty-state renders the expected lang string.
      */
-    public function test_no_items_and_result_placeholder_strings(): void {
+    public function test_no_items_string_renders(): void {
         global $PAGE;
         $this->resetAfterTest();
         $PAGE->set_url('/mod/scorecard/view.php');
@@ -334,17 +334,11 @@ final class learner_render_test extends \advanced_testcase {
         $renderer = $PAGE->get_renderer('mod_scorecard');
 
         $noitems = $renderer->render_learner_no_items();
-        $placeholder = $renderer->render_learner_result_placeholder();
 
         $this->assertStringNotContainsString('[[', $noitems);
-        $this->assertStringNotContainsString('[[', $placeholder);
         $this->assertStringContainsString(
             get_string('view:noitems_learner', 'mod_scorecard'),
             $noitems
-        );
-        $this->assertStringContainsString(
-            get_string('result:placeholder', 'mod_scorecard'),
-            $placeholder
         );
     }
 
@@ -352,7 +346,7 @@ final class learner_render_test extends \advanced_testcase {
      * Phase 3 lang strings introduced in 3.1 resolve cleanly.
      */
     public function test_phase3_lang_strings_resolve(): void {
-        $keys = ['submit:button', 'submit:back', 'result:placeholder'];
+        $keys = ['submit:button', 'submit:back', 'result:hidden'];
         foreach ($keys as $key) {
             $value = get_string($key, 'mod_scorecard');
             $this->assertStringNotContainsString('[[', $value, "Lang key $key did not resolve");

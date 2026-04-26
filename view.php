@@ -72,7 +72,25 @@ if (has_capability('mod/scorecard:submit', $context)) {
         echo $renderer->render_learner_no_items();
     } else if (scorecard_user_has_attempt((int)$scorecard->id, (int)$USER->id)) {
         if (empty($scorecard->allowretakes)) {
-            echo $renderer->render_learner_result_placeholder();
+            if (empty($scorecard->showresult)) {
+                echo $OUTPUT->box(get_string('result:hidden', 'mod_scorecard'), 'generalbox');
+            } else {
+                $attempt = scorecard_get_latest_user_attempt((int)$scorecard->id, (int)$USER->id);
+                $responserows = $DB->get_records(
+                    'scorecard_responses',
+                    ['attemptid' => (int)$attempt->id]
+                );
+                $responsemap = [];
+                $itemids = [];
+                foreach ($responserows as $r) {
+                    $responsemap[(int)$r->itemid] = (int)$r->responsevalue;
+                    $itemids[] = (int)$r->itemid;
+                }
+                $summaryitems = $itemids
+                    ? $DB->get_records_list('scorecard_items', 'id', $itemids)
+                    : [];
+                echo $renderer->render_result_page($scorecard, $attempt, $summaryitems, $responsemap);
+            }
         } else {
             echo $renderer->render_learner_form($scorecard, $items, (int)$cm->id);
         }

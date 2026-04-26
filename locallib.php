@@ -116,6 +116,37 @@ function scorecard_count_user_attempts(int $scorecardid, int $userid): int {
 }
 
 /**
+ * Fetch the most-recent attempt by timecreated for the given (scorecard, user) pair.
+ *
+ * Symmetrical with scorecard_user_has_attempt and scorecard_count_user_attempts.
+ * View.php's result branch reads the latest attempt and hands its snapshotted
+ * columns to render_result_page. Phase 4 reports also use "user's latest
+ * attempt" as a query, which is why this lives in locallib rather than
+ * inline at the call site.
+ *
+ * Ordered by timecreated DESC to give natural-language semantics ("most
+ * recent submission"). attemptnumber should agree in practice -- the submit
+ * handler increments it monotonically per (scorecardid, userid) -- but
+ * timecreated is the durable answer if a future bug ever desynchronises them.
+ *
+ * @param int $scorecardid
+ * @param int $userid
+ * @return stdClass|null Attempt row or null when the user has no attempts.
+ */
+function scorecard_get_latest_user_attempt(int $scorecardid, int $userid): ?stdClass {
+    global $DB;
+    $records = $DB->get_records(
+        'scorecard_attempts',
+        ['scorecardid' => $scorecardid, 'userid' => $userid],
+        'timecreated DESC, id DESC',
+        '*',
+        0,
+        1
+    );
+    return $records ? reset($records) : null;
+}
+
+/**
  * Add a new scored prompt to a scorecard.
  *
  * Sortorder defaults to MAX(sortorder)+1 across all rows (visible, hidden,

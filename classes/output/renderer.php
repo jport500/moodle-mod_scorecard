@@ -397,6 +397,11 @@ class renderer extends plugin_renderer_base {
 
         $radios = [];
         for ($value = $scalemin; $value <= $scalemax; $value++) {
+            // Negative values use an "n"-prefix in the radio id so the resulting
+            // id (e.g. "scorecard-r-7-n3") avoids the "--" sequence that would
+            // otherwise appear with raw negative integers ("scorecard-r-7--3").
+            // Double-dash is legal in HTML ids but trips some CSS selector
+            // implementations and looks like a typo to readers.
             $radioid = "scorecard-r-{$itemid}-" . ($value < 0 ? 'n' . abs($value) : (string)$value);
             $attrs = [
                 'type' => 'radio',
@@ -462,17 +467,127 @@ class renderer extends plugin_renderer_base {
      * Render the placeholder shown when an attempt exists but the result
      * surface is not built yet.
      *
-     * Used by view.php's learner branch in 3.1 for the "attempt exists,
-     * retakes off" path so the branching logic can be smoke-tested without
-     * the full result page (which lands in 3.4). Replaced by a real
-     * render_result_page() call in 3.4.
+     * Render the learner result page: snapshotted score, band heading + message,
+     * optional percentage, optional item summary.
      *
-     * @return string Rendered HTML placeholder.
+     * Reads ONLY from the snapshotted columns on the attempt row
+     * (totalscore, maxscore, percentage, bandid, bandlabelsnapshot,
+     * bandmessagesnapshot, bandmessageformatsnapshot). Never JOINs to live
+     * bands -- SPEC §11.2 requires the result to remain stable as bands are
+     * later edited or deleted.
+     *
+     * Conditional rendering:
+     * - Headline always renders.
+     * - Percentage renders only when $scorecard->showpercentage is truthy,
+     *   rounded to integer for display.
+     * - Band heading renders only when bandlabelsnapshot is non-empty.
+     *   (On fallback, bandlabelsnapshot is null per the 3.2 contract.)
+     * - Band message body renders only when bandmessagesnapshot is non-empty.
+     *   The "matched band with empty message" case (label heading without
+     *   body) is intentional UX, not a fallback fallthrough.
+     * - Item summary renders only when $scorecard->showitemsummary is truthy.
+     *   Wrapped in a collapsed <details> element.
+     *
+     * Item summary: $items contains the union of itemids referenced by the
+     * attempt's response rows (audit-honest: includes items soft-deleted
+     * between submit and revisit, rendered with the deleted_marker
+     * strikethrough+badge so the learner sees what they actually answered).
+     *
+     * @param \stdClass $scorecard Scorecard config row (showpercentage, showitemsummary read).
+     * @param \stdClass $attempt Attempt row with snapshotted scoring fields.
+     * @param array $items Items keyed by id, including soft-deleted; sorted internally by sortorder.
+     * @param array $responses Map of itemid => int response value (matches the items array).
+     * @return string Rendered HTML.
      */
-    public function render_learner_result_placeholder(): string {
+    public function render_result_page(
+        \stdClass $scorecard,
+        \stdClass $attempt,
+        array $items,
+        array $responses
+    ): string {
+        $headline = html_writer::tag(
+            'h3',
+            get_string('result:headline', 'mod_scorecard', (object)[
+                'totalscore' => (int)$attempt->totalscore,
+                'maxscore' => (int)$attempt->maxscore,
+            ]),
+            ['class' => 'scorecard-result-headline']
+        );
+
+        $percentageblock = '';
+        if (!empty($scorecard->showpercentage)) {
+            // Default round() in PHP rounds half away from zero, which is
+            // intentional here: 66.5 displays as 67, matching operator expectation.
+            $rounded = (int)round((float)$attempt->percentage);
+            $percentageblock = html_writer::div(
+                get_string('result:percentage', 'mod_scorecard', $rounded),
+                'scorecard-result-percentage text-muted'
+            );
+        }
+
+        $bandblock = '';
+        if (!empty($attempt->bandlabelsnapshot)) {
+            $bandblock .= html_writer::tag(
+                'h4',
+                format_string((string)$attempt->bandlabelsnapshot),
+                ['class' => 'scorecard-result-band-label']
+            );
+        }
+        if (!empty($attempt->bandmessagesnapshot)) {
+            $bandblock .= html_writer::div(
+                format_text(
+                    (string)$attempt->bandmessagesnapshot,
+                    (int)$attempt->bandmessageformatsnapshot
+                ),
+                'scorecard-result-band-message'
+            );
+        }
+
+        $summaryblock = '';
+        if (!empty($scorecard->showitemsummary)) {
+            $sorted = array_values($items);
+            usort($sorted, function (\stdClass $a, \stdClass $b): int {
+                return (int)$a->sortorder - (int)$b->sortorder;
+            });
+
+            $rows = [];
+            foreach ($sorted as $item) {
+                $itemid = (int)$item->id;
+                if (!array_key_exists($itemid, $responses)) {
+                    continue;
+                }
+                $promptdisplay = format_text((string)$item->prompt, (int)$item->promptformat);
+                $promptdisplay = $this->deleted_marker(
+                    $promptdisplay,
+                    !empty($item->deleted)
+                );
+                $rows[] = html_writer::div(
+                    html_writer::div($promptdisplay, 'scorecard-result-item-prompt') .
+                    html_writer::div(
+                        get_string(
+                            'result:item_value',
+                            'mod_scorecard',
+                            (int)$responses[$itemid]
+                        ),
+                        'scorecard-result-item-value text-muted'
+                    ),
+                    'scorecard-result-item'
+                );
+            }
+
+            if ($rows) {
+                $summaryblock = html_writer::tag(
+                    'details',
+                    html_writer::tag('summary', get_string('result:itemsummary_heading', 'mod_scorecard')) .
+                    html_writer::div(implode('', $rows), 'scorecard-result-items'),
+                    ['class' => 'scorecard-result-summary mt-3']
+                );
+            }
+        }
+
         return html_writer::div(
-            get_string('result:placeholder', 'mod_scorecard'),
-            'scorecard-result-placeholder alert alert-info'
+            $headline . $percentageblock . $bandblock . $summaryblock,
+            'scorecard-result-page'
         );
     }
 
