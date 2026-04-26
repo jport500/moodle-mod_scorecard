@@ -92,6 +92,14 @@ if (has_capability('mod/scorecard:submit', $context)) {
                 echo $renderer->render_result_page($scorecard, $attempt, $summaryitems, $responsemap);
             }
         } else {
+            // Note: callout intentionally shows score+band even when showresult=0.
+            // showresult gates the post-submit results page, not all references to
+            // past performance. Operators wanting total result-blackout should also
+            // disable allowretakes.
+            $previous = scorecard_get_latest_user_attempt((int)$scorecard->id, (int)$USER->id);
+            if ($previous) {
+                echo $renderer->render_previous_attempt_callout($previous);
+            }
             echo $renderer->render_learner_form($scorecard, $items, (int)$cm->id);
         }
     } else {

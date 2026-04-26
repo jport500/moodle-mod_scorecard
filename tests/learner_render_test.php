@@ -352,4 +352,103 @@ final class learner_render_test extends \advanced_testcase {
             $this->assertStringNotContainsString('[[', $value, "Lang key $key did not resolve");
         }
     }
+
+    /**
+     * Phase 3.5: previous-attempt callout renders headline + score + band label.
+     */
+    public function test_previous_attempt_callout_renders(): void {
+        global $DB, $PAGE;
+        $this->resetAfterTest();
+        $scorecard = $this->create_scorecard(['allowretakes' => 1]);
+        $user = $this->getDataGenerator()->create_user();
+        $now = time();
+        $attemptid = (int)$DB->insert_record('scorecard_attempts', [
+            'scorecardid' => (int)$scorecard->id,
+            'userid' => (int)$user->id,
+            'attemptnumber' => 1,
+            'totalscore' => 18,
+            'maxscore' => 30,
+            'percentage' => 60.00,
+            'bandid' => 7,
+            'bandlabelsnapshot' => 'Strong',
+            'bandmessagesnapshot' => 'Nice work.',
+            'bandmessageformatsnapshot' => FORMAT_HTML,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+        $attempt = $DB->get_record('scorecard_attempts', ['id' => $attemptid], '*', MUST_EXIST);
+        $PAGE->set_url('/mod/scorecard/view.php');
+        $PAGE->set_context(\context_system::instance());
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+
+        $html = $renderer->render_previous_attempt_callout($attempt);
+
+        $this->assertStringContainsString(
+            get_string('retake:previousattempt:headline', 'mod_scorecard'),
+            $html
+        );
+        $this->assertStringContainsString('18 / 30', $html);
+        $this->assertStringContainsString('Strong', $html);
+        $this->assertStringContainsString(userdate($now), $html);
+        $this->assertStringNotContainsString('[[', $html);
+    }
+
+    /**
+     * Phase 3.5: previous-attempt callout substitutes the noband lang string when bandlabelsnapshot is null.
+     */
+    public function test_previous_attempt_callout_falls_back_to_noband(): void {
+        global $DB, $PAGE;
+        $this->resetAfterTest();
+        $scorecard = $this->create_scorecard(['allowretakes' => 1]);
+        $user = $this->getDataGenerator()->create_user();
+        $attemptid = (int)$DB->insert_record('scorecard_attempts', [
+            'scorecardid' => (int)$scorecard->id,
+            'userid' => (int)$user->id,
+            'attemptnumber' => 1,
+            'totalscore' => 5,
+            'maxscore' => 30,
+            'percentage' => 16.67,
+            'bandid' => null,
+            'bandlabelsnapshot' => null,
+            'bandmessagesnapshot' => 'Fallback message.',
+            'bandmessageformatsnapshot' => FORMAT_HTML,
+            'timecreated' => time(),
+            'timemodified' => time(),
+        ]);
+        $attempt = $DB->get_record('scorecard_attempts', ['id' => $attemptid], '*', MUST_EXIST);
+        $PAGE->set_url('/mod/scorecard/view.php');
+        $PAGE->set_context(\context_system::instance());
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+
+        $html = $renderer->render_previous_attempt_callout($attempt);
+
+        $this->assertStringContainsString(
+            get_string('retake:previousattempt:noband', 'mod_scorecard'),
+            $html
+        );
+        $this->assertStringContainsString('5 / 30', $html);
+    }
+
+    /**
+     * Phase 3.5: form on retake renders with no checked radios when preselected is empty.
+     *
+     * Q3 from the kickoff: a retake renders a blank form, not a pre-populated one.
+     * View.php passes the default empty array; this test enforces the contract structurally.
+     */
+    public function test_render_learner_form_does_not_preselect_on_retake(): void {
+        global $PAGE;
+        $this->resetAfterTest();
+        $scorecard = $this->create_scorecard();
+        $this->add_item((int)$scorecard->id, ['prompt' => 'P1']);
+        $this->add_item((int)$scorecard->id, ['prompt' => 'P2']);
+        $items = scorecard_get_visible_items((int)$scorecard->id);
+        $PAGE->set_url('/mod/scorecard/view.php');
+        $PAGE->set_context(\context_system::instance());
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+
+        $html = $renderer->render_learner_form($scorecard, $items, 1);
+
+        $this->assertStringNotContainsString('checked="checked"', $html);
+        $this->assertStringNotContainsString("checked='checked'", $html);
+    }
 }

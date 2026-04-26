@@ -592,6 +592,48 @@ class renderer extends plugin_renderer_base {
     }
 
     /**
+     * Render a compact previous-attempt summary above the form on retake.
+     *
+     * Shown by view.php when allowretakes is on AND the user already has an
+     * attempt, immediately above render_learner_form. Reads only snapshotted
+     * fields on the attempt (timecreated, totalscore, maxscore,
+     * bandlabelsnapshot) so a band edit between submit and retake does not
+     * shift the displayed summary -- matches SPEC section 11.2's snapshot
+     * stability rule for the result page.
+     *
+     * Bandlabelsnapshot is null on the fallback path; the noband lang string
+     * substitutes in that case so the format reads cleanly without an empty
+     * tail segment.
+     *
+     * @param \stdClass $attempt Attempt row (timecreated, totalscore, maxscore, bandlabelsnapshot).
+     * @return string Rendered HTML.
+     */
+    public function render_previous_attempt_callout(\stdClass $attempt): string {
+        $bandlabel = !empty($attempt->bandlabelsnapshot)
+            ? format_string((string)$attempt->bandlabelsnapshot)
+            : get_string('retake:previousattempt:noband', 'mod_scorecard');
+
+        $body = get_string(
+            'retake:previousattempt:format',
+            'mod_scorecard',
+            (object)[
+                'date' => userdate((int)$attempt->timecreated),
+                'totalscore' => (int)$attempt->totalscore,
+                'maxscore' => (int)$attempt->maxscore,
+                'band' => $bandlabel,
+            ]
+        );
+
+        return html_writer::div(
+            html_writer::tag(
+                'strong',
+                get_string('retake:previousattempt:headline', 'mod_scorecard')
+            ) . ' &mdash; ' . $body,
+            'scorecard-previous-attempt-callout alert alert-info'
+        );
+    }
+
+    /**
      * Render the bands list with empty-state and "Add a band" button.
      *
      * Bands display by minscore ASC (natural numeric order). Soft-deleted bands
