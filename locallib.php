@@ -213,3 +213,79 @@ function scorecard_renumber_items(int $scorecardid): void {
         $position++;
     }
 }
+
+/**
+ * Add a new result band to a scorecard.
+ *
+ * Sortorder defaults to MAX(sortorder)+1 — the column is schema-required but
+ * vestigial in MVP since bands display by minscore ASC. Kept incremental for
+ * forward compatibility with v1.1+ if explicit reorder is added.
+ *
+ * @param stdClass $data Form data; must include scorecardid, minscore, maxscore, label.
+ * @return int New band id.
+ */
+function scorecard_add_band(stdClass $data): int {
+    global $DB;
+
+    $now = time();
+    $data->message = $data->message ?? '';
+    $data->messageformat = $data->messageformat ?? FORMAT_HTML;
+    $data->deleted = 0;
+    $data->timecreated = $now;
+    $data->timemodified = $now;
+
+    if (!isset($data->sortorder)) {
+        $max = (int)$DB->get_field_sql(
+            'SELECT COALESCE(MAX(sortorder), 0) FROM {scorecard_bands} WHERE scorecardid = ?',
+            [$data->scorecardid]
+        );
+        $data->sortorder = $max + 1;
+    }
+
+    return (int)$DB->insert_record('scorecard_bands', $data);
+}
+
+/**
+ * Update an existing band.
+ *
+ * Re-parenting (scorecardid), the soft-delete flag, and sortorder are stripped
+ * from the data object — the same separation-of-concerns rule as items.
+ *
+ * @param stdClass $data Form data; must include id.
+ */
+function scorecard_update_band(stdClass $data): void {
+    global $DB;
+
+    $data->timemodified = time();
+    unset($data->scorecardid, $data->deleted, $data->sortorder);
+    $DB->update_record('scorecard_bands', $data);
+}
+
+/**
+ * Delete a band, branching on attempt count for the parent scorecard.
+ *
+ * 0 attempts: hard-delete the row.
+ * 1+ attempts: soft-delete (deleted=1). The row is retained because attempt
+ * rows reference it via bandid (soft FK). SPEC §8.4 already snapshots
+ * label/message onto each attempt, so the soft-deleted band row is read-only
+ * metadata after that point — but keeping it preserves the FK integrity that
+ * Phase 4 reports may rely on for joining.
+ *
+ * No renumber pass after hard-delete — bands display by minscore so a sortorder
+ * gap is harmless.
+ *
+ * @param int $bandid
+ */
+function scorecard_delete_band(int $bandid): void {
+    global $DB;
+
+    $band = $DB->get_record('scorecard_bands', ['id' => $bandid], '*', MUST_EXIST);
+
+    if (scorecard_count_attempts((int)$band->scorecardid) > 0) {
+        $DB->set_field('scorecard_bands', 'deleted', 1, ['id' => $bandid]);
+        $DB->set_field('scorecard_bands', 'timemodified', time(), ['id' => $bandid]);
+        return;
+    }
+
+    $DB->delete_records('scorecard_bands', ['id' => $bandid]);
+}

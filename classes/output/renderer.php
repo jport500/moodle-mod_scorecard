@@ -17,12 +17,12 @@
 /**
  * Plugin renderer for mod_scorecard.
  *
- * Centralises the visual treatment of item rows so the manage screen and
- * the Phase 4 reports detail can share a single rendering helper. Soft-
- * deleted items render with a "(deleted)" badge plus a strikethrough on
- * the prompt; hidden items get a "(hidden)" badge. Pattern follows
- * mod_quiz's edit_renderer.php inline-badge approach (line 1056+) rather
- * than a Mustache partial.
+ * Centralises the visual treatment of item and band rows so the manage
+ * screen and the Phase 4 reports detail can share rendering helpers. The
+ * private deleted_marker() helper produces the "(deleted)" badge plus
+ * strikethrough that both render_item_row and render_band_row apply to
+ * their primary text. Pattern follows mod_quiz's edit_renderer.php
+ * inline-badge approach (line 1056+) rather than a Mustache partial.
  *
  * @package    mod_scorecard
  * @copyright  2026 LMS Light
@@ -41,12 +41,35 @@ use stdClass;
  */
 class renderer extends plugin_renderer_base {
     /**
+     * Wrap a row's primary text with strikethrough + (deleted) badge if soft-deleted.
+     *
+     * Single source of truth shared by render_item_row and render_band_row so
+     * the visual treatment of soft-deleted rows stays consistent. Reusable at
+     * Phase 4 for any list rendering soft-deleted records.
+     *
+     * @param string $primarytext Already-formatted HTML or escaped plain string.
+     * @param bool $deleted True when the row is soft-deleted.
+     * @return string The primary text either unchanged, or wrapped in <s>
+     *                with a (deleted) badge appended.
+     */
+    private function deleted_marker(string $primarytext, bool $deleted): string {
+        if (!$deleted) {
+            return $primarytext;
+        }
+        return html_writer::tag('s', $primarytext, ['class' => 'text-muted']) .
+            html_writer::span(
+                get_string('badge:deleted', 'mod_scorecard'),
+                'badge bg-secondary text-white ms-2'
+            );
+    }
+
+    /**
      * Render a single item row in the manage screen.
      *
-     * Soft-deleted items render with a badge and strikethrough; action links
-     * are suppressed. Hidden items get a "(hidden)" badge. Move-up and
-     * move-down links are emitted only when a non-deleted neighbour exists
-     * on that side.
+     * Soft-deleted items get strikethrough + (deleted) badge via the shared
+     * deleted_marker helper; action links are suppressed. Hidden (visible=0)
+     * items get an additional (hidden) badge. Move-up and move-down links
+     * are emitted only when a non-deleted neighbour exists on that side.
      *
      * @param stdClass $item Row from {scorecard_items}.
      * @param moodle_url|null $manageurl Manage page URL for action links.
@@ -65,19 +88,12 @@ class renderer extends plugin_renderer_base {
         $hidden = empty($item->visible);
 
         $promptdisplay = format_text($item->prompt, (int)$item->promptformat);
-        if ($deleted) {
-            $promptdisplay = html_writer::tag('s', $promptdisplay, ['class' => 'text-muted']);
-        }
+        $promptdisplay = $this->deleted_marker($promptdisplay, $deleted);
 
-        $badges = '';
-        if ($deleted) {
-            $badges = html_writer::span(
-                get_string('item:badge:deleted', 'mod_scorecard'),
-                'badge bg-secondary text-white ms-2'
-            );
-        } else if ($hidden) {
-            $badges = html_writer::span(
-                get_string('item:badge:hidden', 'mod_scorecard'),
+        $hiddenbadge = '';
+        if (!$deleted && $hidden) {
+            $hiddenbadge = html_writer::span(
+                get_string('badge:hidden', 'mod_scorecard'),
                 'badge bg-warning text-dark ms-2'
             );
         }
@@ -119,7 +135,7 @@ class renderer extends plugin_renderer_base {
             $actions = html_writer::div(implode(' ', $links), 'item-actions ms-3');
         }
 
-        $body = html_writer::div($promptdisplay . $badges . $anchors, 'item-body flex-grow-1');
+        $body = html_writer::div($promptdisplay . $hiddenbadge . $anchors, 'item-body flex-grow-1');
 
         return html_writer::div(
             $body . $actions,
@@ -171,6 +187,102 @@ class renderer extends plugin_renderer_base {
             html_writer::link(
                 new moodle_url($manageurl, ['action' => 'add']),
                 get_string('item:add', 'mod_scorecard'),
+                ['class' => 'btn btn-primary']
+            ),
+            'mt-3'
+        );
+
+        return $body . $addbutton;
+    }
+
+    /**
+     * Render a single band row in the manage screen.
+     *
+     * Soft-deleted bands get strikethrough + (deleted) badge on the label via
+     * the shared deleted_marker helper; action links are suppressed. Bands
+     * have no hidden state (no visible flag in the schema) and no move-up /
+     * move-down — they display by minscore ASC.
+     *
+     * @param stdClass $band Row from {scorecard_bands}.
+     * @param moodle_url|null $manageurl Manage page URL for action links.
+     *                                   Pass null for read-only contexts (Phase 4 reports).
+     * @return string Rendered HTML for the row.
+     */
+    public function render_band_row(stdClass $band, ?moodle_url $manageurl): string {
+        $deleted = !empty($band->deleted);
+
+        $label = format_string((string)$band->label);
+        $labeldisplay = $this->deleted_marker($label, $deleted);
+
+        $range = html_writer::span(
+            (int)$band->minscore . '–' . (int)$band->maxscore,
+            'small text-muted ms-2'
+        );
+
+        $message = '';
+        if (!empty($band->message)) {
+            $message = html_writer::div(
+                format_text($band->message, (int)$band->messageformat),
+                'small text-muted mt-1'
+            );
+        }
+
+        $actions = '';
+        if (!$deleted && $manageurl !== null) {
+            $sesskey = sesskey();
+            $links = [
+                html_writer::link(
+                    new moodle_url($manageurl, ['action' => 'edit', 'bandid' => $band->id]),
+                    $this->pix_icon('t/edit', get_string('band:edit', 'mod_scorecard'))
+                ),
+                html_writer::link(
+                    new moodle_url($manageurl, ['action' => 'delete', 'bandid' => $band->id, 'sesskey' => $sesskey]),
+                    $this->pix_icon('t/delete', get_string('band:delete', 'mod_scorecard'))
+                ),
+            ];
+            $actions = html_writer::div(implode(' ', $links), 'item-actions ms-3');
+        }
+
+        $body = html_writer::div(
+            html_writer::div($labeldisplay . $range, 'band-label-row') . $message,
+            'item-body flex-grow-1'
+        );
+
+        return html_writer::div(
+            $body . $actions,
+            'item-row d-flex flex-row justify-content-between align-items-start py-2 border-bottom'
+        );
+    }
+
+    /**
+     * Render the bands list with empty-state and "Add a band" button.
+     *
+     * Bands display by minscore ASC (natural numeric order). Soft-deleted bands
+     * appear at their natural minscore position with the (deleted) badge.
+     *
+     * @param array $bands Band rows from {scorecard_bands}, keyed by id.
+     * @param moodle_url $manageurl Manage page URL for action links.
+     * @return string Rendered HTML.
+     */
+    public function render_bands_list(array $bands, moodle_url $manageurl): string {
+        $sorted = array_values($bands);
+        usort($sorted, function (stdClass $a, stdClass $b): int {
+            return (int)$a->minscore - (int)$b->minscore;
+        });
+
+        $rows = [];
+        foreach ($sorted as $band) {
+            $rows[] = $this->render_band_row($band, $manageurl);
+        }
+
+        $body = $rows
+            ? implode('', $rows)
+            : html_writer::div(get_string('manage:bands:empty', 'mod_scorecard'), 'text-muted py-2');
+
+        $addbutton = html_writer::div(
+            html_writer::link(
+                new moodle_url($manageurl, ['action' => 'add']),
+                get_string('band:add', 'mod_scorecard'),
                 ['class' => 'btn btn-primary']
             ),
             'mt-3'

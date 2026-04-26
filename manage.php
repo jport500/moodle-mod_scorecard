@@ -34,6 +34,7 @@ $id = required_param('id', PARAM_INT);
 $tab = optional_param('tab', 'items', PARAM_ALPHA);
 $action = optional_param('action', '', PARAM_ALPHA);
 $itemid = optional_param('itemid', 0, PARAM_INT);
+$bandid = optional_param('bandid', 0, PARAM_INT);
 $confirmed = (bool)optional_param('confirm', 0, PARAM_BOOL);
 
 $cm = get_coursemodule_from_id('scorecard', $id, 0, false, MUST_EXIST);
@@ -116,12 +117,64 @@ if ($tab === 'items') {
     }
 }
 
+if ($tab === 'bands') {
+    if ($action === 'delete' && $confirmed && $bandid > 0) {
+        require_sesskey();
+        scorecard_delete_band($bandid);
+        redirect(
+            $tabbaseurl,
+            get_string('band:notify:deleted', 'mod_scorecard'),
+            null,
+            \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    if ($action === 'add' || $action === 'edit') {
+        require_once(__DIR__ . '/classes/form/band_form.php');
+        $formurl = new moodle_url('/mod/scorecard/manage.php', [
+            'id' => $cm->id,
+            'tab' => 'bands',
+            'action' => $action,
+        ]);
+        if ($action === 'edit' && $bandid > 0) {
+            $formurl->param('bandid', $bandid);
+        }
+        $bandform = new \mod_scorecard\form\band_form($formurl);
+
+        if ($bandform->is_cancelled()) {
+            redirect($tabbaseurl);
+        }
+        if ($data = $bandform->get_data()) {
+            $data->message = (string)($data->message_editor['text'] ?? '');
+            $data->messageformat = (int)($data->message_editor['format'] ?? FORMAT_HTML);
+            unset($data->message_editor);
+            $data->minscore = (int)$data->minscore;
+            $data->maxscore = (int)$data->maxscore;
+            $data->label = (string)($data->label ?? '');
+
+            if ($action === 'add') {
+                $data->scorecardid = $scorecard->id;
+                scorecard_add_band($data);
+                $msg = get_string('band:notify:added', 'mod_scorecard');
+            } else {
+                $data->id = $bandid;
+                scorecard_update_band($data);
+                $msg = get_string('band:notify:updated', 'mod_scorecard');
+            }
+            redirect($tabbaseurl, $msg, null, \core\output\notification::NOTIFY_SUCCESS);
+        }
+    }
+}
+
 $pageurl = new moodle_url('/mod/scorecard/manage.php', ['id' => $cm->id, 'tab' => $tab]);
 if ($action !== '') {
     $pageurl->param('action', $action);
 }
 if ($itemid > 0) {
     $pageurl->param('itemid', $itemid);
+}
+if ($bandid > 0) {
+    $pageurl->param('bandid', $bandid);
 }
 $PAGE->set_url($pageurl);
 $PAGE->set_title(format_string($scorecard->name) . ': ' . get_string('manage:heading', 'mod_scorecard'));
@@ -207,7 +260,57 @@ switch ($tab) {
         break;
 
     case 'bands':
-        echo $OUTPUT->box(get_string('manage:bands:empty', 'mod_scorecard'), 'generalbox');
+        if ($action === 'add' || $action === 'edit') {
+            $heading = $action === 'add'
+                ? get_string('band:heading:add', 'mod_scorecard')
+                : get_string('band:heading:edit', 'mod_scorecard');
+            echo $OUTPUT->heading($heading, 3);
+
+            if ($action === 'edit' && $bandid > 0) {
+                $existing = $DB->get_record('scorecard_bands', ['id' => $bandid], '*', MUST_EXIST);
+                $bandform->set_data([
+                    'minscore' => (int)$existing->minscore,
+                    'maxscore' => (int)$existing->maxscore,
+                    'label' => $existing->label,
+                    'message_editor' => [
+                        'text' => (string)($existing->message ?? ''),
+                        'format' => (int)$existing->messageformat,
+                    ],
+                ]);
+            } else {
+                $bandform->set_data([]);
+            }
+            $bandform->display();
+            break;
+        }
+
+        if ($action === 'delete' && $bandid > 0) {
+            $stringkey = scorecard_count_attempts((int)$scorecard->id) === 0
+                ? 'band:confirm:harddelete'
+                : 'band:confirm:softdelete';
+            $confirmurl = new moodle_url('/mod/scorecard/manage.php', [
+                'id' => $cm->id,
+                'tab' => 'bands',
+                'action' => 'delete',
+                'bandid' => $bandid,
+                'confirm' => 1,
+                'sesskey' => sesskey(),
+            ]);
+            echo $OUTPUT->confirm(
+                get_string($stringkey, 'mod_scorecard'),
+                $confirmurl,
+                $tabbaseurl
+            );
+            break;
+        }
+
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+        $bands = $DB->get_records(
+            'scorecard_bands',
+            ['scorecardid' => $scorecard->id],
+            'minscore ASC, id ASC'
+        );
+        echo $renderer->render_bands_list($bands, $tabbaseurl);
         break;
 
     case 'reports':
