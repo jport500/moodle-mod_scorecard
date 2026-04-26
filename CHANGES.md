@@ -1,5 +1,134 @@
 # mod_scorecard release notes
 
+## v0.3.0 — Phase 3 learner submission (2026-04-26)
+
+**MATURITY_ALPHA. Learner-facing experience is now usable end-to-end;
+gradebook integration and reports remain in Phases 5a and 4
+respectively.** This release lets a learner complete a scorecard from
+start to finish: the submission form renders all visible items with
+anchor labels and required radio groups, server-side validation
+collects per-item errors and form-level POST-injection guards, the
+scoring engine totals responses and matches a result band (with
+snapshot capture so the result stays stable as bands are later
+edited), and the result page shows the snapshotted score, optional
+percentage, the matched band heading and message, and an audit-honest
+item summary. Retake-enabled scorecards show a "Previous attempt"
+callout above the form on revisit.
+
+### Shipped
+
+**Submission form.** Visible at `/mod/scorecard/view.php?id=<cmid>`
+for users with `mod/scorecard:submit`. One fieldset per visible
+non-deleted item; the activity scale renders as a row of labelled
+radio inputs with optional per-item anchor overrides flanking the
+row. Form posts to `submit.php` with sesskey + cmid; the submit
+endpoint owns the HTTP boundary (login + sesskey + capability) and
+delegates to a `scorecard_handle_submission()` helper for everything
+else. PHPUnit calls the helper directly with synthesized inputs so
+handler logic is exercised without an HTTP simulation.
+
+**Validation collects all errors on a single re-render.** The handler
+runs four steps in order: itemid-subset guard against POST injection,
+lifecycle gate via re-fetch of visible items, per-item missing +
+out-of-range collection, and a duplicate-attempt short-circuit when
+retakes is off. Per-item errors render inline above the offending
+fieldset; form-level errors render in a notification at the top of
+the page. Radio selections are preserved across re-render.
+
+**Scoring engine.** Pure function (no DB), unit-tested across 12
+cases including boundary inclusion, off-by-one robustness, and
+`coding_exception` paths for empty items and out-of-range responses.
+Sums responses for visible items, computes total + max + percentage
+(rounded to two decimals for storage), iterates the bands array once
+sorted by `minscore ASC, id ASC`, and returns the first matching
+band's id, label, message, and format. On no match, the per-instance
+fallback message and format snapshot onto the attempt instead.
+
+**Audit-write semantics.** Response rows persist for every itemid
+submitted on the form, including items soft-deleted between render
+and submit. The engine sums only over visible items at submit time;
+audit-only rows survive in `scorecard_responses` so Phase 4 reports
+can render "this item was answered before being removed" rather than
+silent disappearance. The engine's audit-only contract from the
+scoring tests is now load-bearing in production.
+
+**Single-transaction persist.** Attempt INSERT + N response INSERTs
+run inside `$DB->start_delegated_transaction()`. The
+`\mod_scorecard\event\attempt_submitted` event fires after
+`allow_commit()`, so subscribers observe a fully-persisted attempt
+with response rows and band snapshots in place.
+
+**Result page.** Reads only from snapshotted columns on the attempt
+row (`totalscore`, `maxscore`, `percentage`, `bandid`,
+`bandlabelsnapshot`, `bandmessagesnapshot`,
+`bandmessageformatsnapshot`); never JOINs to live bands, matching
+SPEC §11.2's stability rule. Conditional rendering: percentage when
+`showpercentage` is on (rounded to integer for display), band heading
+when `bandlabelsnapshot` is non-empty, band message body when
+`bandmessagesnapshot` is non-empty. The matched-band-with-empty-
+message case renders the heading without a body — NOT a fallback
+fallthrough — so empty-message bands behave as deliberately authored.
+
+**Audit-honest item summary.** The collapsible per-item summary
+(when `showitemsummary` is on) uses the union of itemids referenced
+by the attempt's response rows, rendered with the existing
+strikethrough + "(deleted)" badge for items soft-deleted since
+submit. Learners revisiting a result see what they actually
+answered, not what's currently configured.
+
+**Retake handling.** When `allowretakes` is on and the user has a
+prior attempt, the form renders directly with a compact "Previous
+attempt" callout above showing the submission timestamp, score, and
+band label (or "No band match" on the fallback path). The form
+itself preselected radios stay blank — retakes start fresh. The
+callout intentionally shows score and band even when `showresult` is
+off: `showresult` gates the post-submit results page, not all
+references to past performance, and operators wanting total
+result-blackout should also disable `allowretakes`.
+
+**Hidden-result branch.** When `showresult` is off and the user has
+an attempt (retakes off), view.php short-circuits with a friendly
+"result not shown" notice rather than rendering the result page.
+
+### Quality gates
+
+- `phpcs --standard=moodle` clean plugin-wide (0 errors / 0 warnings).
+- 86 PHPUnit tests / 341 assertions across nine test files (Phase 2
+  baseline 42 / 174 + 10 / 47 learner render + 12 / 44 scoring engine
+  + 9 / 42 submission handler + 10 / 28 result render + 3 / 9 retake
+  callout, less 2 placeholder assertions trimmed when the 3.4 result
+  page replaced the 3.1 placeholder stub).
+- Manual UI walkthrough at every phase gate covering paths the
+  PHPUnit suite cannot easily exercise: form layout and accessibility
+  flow, validation re-render preserving selections, post-submit
+  redirect, retake callout placement and copy, and the combinations
+  of `showresult` and `allowretakes` settings.
+
+### Spec status
+
+`docs/SPEC.md` remains v0.4 (sha256-verified against canonical raw
+URL at commit). Phase 3 added no spec material.
+
+### Followups carried forward
+
+All v0.2.0 followups still apply (Phase 5b prerequisites, restore
+action for soft-deleted items / bands, out-of-theoretical-range bands
+silently clipped, upstream `CLAUDE.md` doc corrections). Phase 3
+added two report-side followups for Phase 4:
+
+- **Flag audit rows with out-of-range values.** When POST tampering
+  writes an out-of-scale value on a soft-deleted audit-only itemid,
+  the engine ignores it from totalscore but the audit row stores the
+  cast value as submitted. Phase 4 reports can flag these rows as a
+  tampering / soft-delete-race indicator; optional report-side
+  enhancement, not Phase 3 scope.
+- **`get_attempt_responses` helper shape.** Phase 3.4 builds itemids
+  + responsemap inline in view.php's result branch (two queries:
+  response rows then `get_records_list` on the itemid union). Phase
+  4 reports may want a richer shape (joined item rows, multiple
+  attempts at once); decide helper shape when Phase 4 has actual
+  call sites rather than preempting with a speculative refactor.
+
 ## v0.2.0 — Phase 2 authoring (2026-04-26)
 
 **MATURITY_ALPHA. Teacher-facing authoring is now usable end-to-end;

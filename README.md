@@ -12,18 +12,20 @@ total score plus interpretation.
 
 ## Status
 
-**v0.2.0 — Phase 2 (Authoring) shipped 2026-04-26.** Teachers can now
-configure a scorecard end-to-end: items, bands, coverage validation,
-and lifecycle rules for editing after attempts start. The plugin
-remains MATURITY_ALPHA — learner-facing behaviour (submission,
-scoring, results) lands in Phase 3, so the activity is not yet
-ready for end-user rollout.
+**v0.3.0 — Phase 3 (Learner submission) shipped 2026-04-26.** Learners
+can now complete a scorecard end-to-end: submission form with
+validation, scoring engine with band matching and snapshotting,
+result page reading only snapshotted fields, and retake handling
+with a previous-attempt callout. The plugin remains MATURITY_ALPHA —
+gradebook integration and reports land in Phases 5a and 4
+respectively, so operators relying on grade flow or attempt-list
+exports should wait for those releases.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 1 — Skeleton | Install schema, capabilities, mod_form, view, privacy provider scaffold, settings-only backup/restore, skeleton tests | shipped v0.1.0 |
-| 2 — Authoring | Manage screen with Items + Bands tabs, CRUD, soft-delete, reorder, band coverage validation, lifecycle gate | **shipped v0.2.0** |
-| 3 — Learner submission | Submission form, validation, attempt + response save, scoring engine, band matching with snapshotting, result page | planned |
+| 2 — Authoring | Manage screen with Items + Bands tabs, CRUD, soft-delete, reorder, band coverage validation, lifecycle gate | shipped v0.2.0 |
+| 3 — Learner submission | Submission form, validation, attempt + response save, scoring engine, band matching with snapshotting, result page, retake callout | **shipped v0.3.0** |
 | 4 — Reporting | Reports tab, expandable detail, CSV export, group-mode awareness | planned |
 | 5a — Completion + gradebook | Activity completion, gradebook integration, per-tenant theming hooks | planned |
 | 5b — Backup + privacy | Full backup/restore (items, bands, attempts, responses with snapshot fidelity), privacy provider implementation | planned |
@@ -41,7 +43,7 @@ Standard Moodle plugin install:
    ```
 
 3. Confirm install at Site administration > Plugins overview > Activity
-   modules > Scorecard. Expected version: `2026042500`.
+   modules > Scorecard. Expected version: `2026042601`.
 
 Requires Moodle `2024100100` or later (Moodle 4.5+; tested on 5.1.3).
 
@@ -133,6 +135,111 @@ or warned to keep historical attempt scoring stable:
 
 Reports land in Phase 4 — the tab is a placeholder for now.
 
+## Learner experience
+
+Once a teacher has authored items and bands, the activity is usable
+end-to-end for learners. This section describes what learners see
+and which activity-level settings shape the experience.
+
+### Submission form
+
+A learner with `mod/scorecard:submit` lands on the activity view and
+sees one fieldset per visible non-deleted item. Each fieldset carries
+the item's prompt above a row of radio inputs spanning the activity's
+`scalemin` to `scalemax`, with the activity's low / high anchor
+labels (or per-item overrides if set) flanking the row. The submit
+button posts to `submit.php` with the standard Moodle sesskey.
+
+Items hidden via the "Visible to learners" toggle never appear on
+the form. Items soft-deleted between page render and submit are
+handled by the validation pipeline: their submitted responses still
+write to the audit table, but they don't contribute to the score.
+
+### Validation behaviour
+
+The submission handler validates server-side (clients can disable the
+form's `required` attribute) and **collects all errors** before
+re-rendering — the learner sees every problem on a single
+re-render rather than fix-one-then-resubmit:
+
+- **Missing response on a visible item** — inline error above that
+  fieldset asking the learner to answer.
+- **Out-of-range value** (POST manipulation) — inline error on the
+  fieldset; the activity scale is enforced.
+- **Itemid not belonging to this scorecard** (form-level POST
+  injection) — single notice at the top of the page asking the
+  learner to reload and try again.
+- **Every visible item soft-deleted between render and submit** —
+  form-level notice that the scorecard has no scorable items right
+  now, with a pointer to contact the facilitator.
+
+Selections are preserved across re-render so the learner only fixes
+the flagged fieldsets.
+
+### Result page
+
+Shown after submit (with retakes off and `showresult` on) or on any
+revisit while no retakes are allowed. The page reads only from
+**snapshot fields** captured on the attempt row at submit time, so a
+band edited or deleted afterwards never shifts what the learner
+sees:
+
+- **Score line** — "Your score: X out of Y", always shown.
+- **Percentage** — shown only when the activity's `showpercentage`
+  setting is on; rounded to integer for display.
+- **Band heading + interpretive message** — the heading shows when
+  the attempt matched a band and the band's label is non-empty; the
+  message body shows when the band's message is non-empty. A band
+  authored with a label but an empty message renders the heading
+  without a body, intentionally — that's not the fallback path.
+- **Fallback** — when no band matched the attempt's score, the
+  activity's per-instance fallback message renders without a
+  heading.
+- **Item summary** — shown only when the activity's
+  `showitemsummary` setting is on; collapsed by default in a
+  `<details>` element. Each row shows the prompt and the learner's
+  response. Items soft-deleted between submit and revisit render
+  with a strikethrough and "(deleted)" badge so the learner sees
+  what they actually answered, not what's currently configured.
+
+### Retake handling
+
+When `allowretakes` is on and the learner has a prior attempt, the
+view shows a compact **previous-attempt callout** above the form:
+the submission timestamp, score, and band label (or "No band match"
+on the fallback path). The form itself starts blank — retakes don't
+pre-populate from the previous attempt — so each retake is a
+deliberate response.
+
+The callout intentionally shows score and band even when
+`showresult` is off. `showresult` was specified to gate the
+post-submit results page, not all references to past performance;
+suppressing the score in the callout would produce a confusing "you
+submitted before but we won't tell you anything about it" UX.
+Operators wanting full result-blackout should also disable
+`allowretakes` (one attempt, no result revealed in the activity).
+
+### Settings reference (learner-visible effects)
+
+- **`showresult`** — gates the post-submit results page. Off ⇒ the
+  learner sees a "result not shown" notice instead of the result
+  page on revisit.
+- **`showpercentage`** — gates the percentage line on the result
+  page (and only there).
+- **`showitemsummary`** — gates the collapsed per-item summary on
+  the result page.
+- **`allowretakes`** — controls whether revisiting the activity
+  shows the result page (off) or the form with a previous-attempt
+  callout (on).
+
+### What's not yet in the learner experience
+
+Gradebook integration lands in Phase 5a — submitted attempts compute
+a `totalscore` and store it on the attempt row, but the score isn't
+yet propagated to Moodle's gradebook even when `gradeenabled` is on.
+Multiple-attempt history (a list of all the learner's attempts with
+per-attempt drill-down) is part of Phase 4 reports.
+
 ## Running tests
 
 PHPUnit init (one-time per Moodle instance):
@@ -150,7 +257,11 @@ ddev exec bash -c 'cd /var/www/html/moodle && vendor/bin/phpunit \
     public/mod/scorecard/tests/locallib_test.php \
     public/mod/scorecard/tests/locallib_band_test.php \
     public/mod/scorecard/tests/locallib_band_coverage_test.php \
-    public/mod/scorecard/tests/lifecycle_test.php'
+    public/mod/scorecard/tests/lifecycle_test.php \
+    public/mod/scorecard/tests/learner_render_test.php \
+    public/mod/scorecard/tests/scoring_test.php \
+    public/mod/scorecard/tests/submission_test.php \
+    public/mod/scorecard/tests/result_render_test.php'
 ```
 
 Or run an individual test file:
@@ -196,8 +307,8 @@ export, AI-assisted item generation).
 - **LMS Light portable lessons:** [`lms-light-docs/LESSONS.md`](https://github.com/jport500/lms-light-docs/blob/main/LESSONS.md)
   — process patterns and failure modes accumulated across plugin work.
 - **Specification:** [`docs/SPEC.md`](docs/SPEC.md) — current plugin
-  specification (v0.4 as of v0.2.0 release; sha256-verified against
-  the canonical raw URL on commit).
+  specification (v0.4, unchanged through v0.3.0; sha256-verified
+  against the canonical raw URL on commit).
 - **Release notes:** [`CHANGES.md`](CHANGES.md).
 
 ## License
