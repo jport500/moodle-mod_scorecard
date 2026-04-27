@@ -24,7 +24,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026042700;
+$plugin->version   = 2026042701;
 $plugin->requires  = 2024100100;
 $plugin->component = 'mod_scorecard';
 $plugin->maturity  = MATURITY_ALPHA;

@@ -195,4 +195,41 @@ class mod_scorecard_mod_form extends moodleform_mod {
 
         return $errors;
     }
+
+    /**
+     * Add the completionsubmit custom rule to the activity completion form.
+     *
+     * Phase 5a.4: SPEC §9.3 "complete when learner submits at least one
+     * attempt." Default 1 (checkbox checked) on new scorecards — the
+     * natural completion criterion for self-assessments is "they submitted."
+     * Existing deployments upgrading to this version see the column at
+     * default 0 (install.xml floor); operators explicitly opt in via the
+     * activity edit form.
+     *
+     * @return array Field names this rule contributes to the completion section.
+     */
+    public function add_completion_rules(): array {
+        $mform = $this->_form;
+        $suffix = $this->get_suffix();
+        $name = 'completionsubmit' . $suffix;
+        $mform->addElement(
+            'checkbox',
+            $name,
+            '',
+            get_string('completionsubmit', 'mod_scorecard')
+        );
+        $mform->setDefault($name, 1);
+        return [$name];
+    }
+
+    /**
+     * Whether any custom completion rule is enabled in the submitted data.
+     *
+     * @param array $data Submitted form data.
+     * @return bool True when at least one custom completion rule is set.
+     */
+    public function completion_rule_enabled($data): bool {
+        $suffix = $this->get_suffix();
+        return !empty($data['completionsubmit' . $suffix]);
+    }
 }

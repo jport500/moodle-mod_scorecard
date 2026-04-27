@@ -1178,6 +1178,21 @@ function scorecard_handle_submission(
     // just-committed attempt automatically.
     scorecard_update_grades($scorecard);
 
+    // Phase 5a.4: mark activity completion when both completion tracking is
+    // enabled for this cm AND completionsubmit is set on the scorecard
+    // (SPEC §9.3 "complete when learner submits at least one attempt").
+    // The custom_completion class already reads scorecard_attempts as the
+    // state source — this update_state call forces immediate state
+    // propagation so the operator-visible completion checkmark appears as
+    // soon as the form returns, rather than on next cron refresh.
+    if (!empty($scorecard->completionsubmit)) {
+        $course = $DB->get_record('course', ['id' => (int)$cm->course], '*', MUST_EXIST);
+        $completion = new \completion_info($course);
+        if ($completion->is_enabled($cm)) {
+            $completion->update_state($cm, COMPLETION_COMPLETE, $userid);
+        }
+    }
+
     return [
         'status' => 'submitted',
         'errors' => [],

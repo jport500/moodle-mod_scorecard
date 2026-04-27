@@ -28,8 +28,10 @@
  * Phase-honest declarations: features flip to true as their implementations
  * land. Phase 1.4 enables FEATURE_BACKUP_MOODLE2 (settings-only backup;
  * nested item/band/attempt/response capture lands in Phase 5b). Phase 5a.1
- * enables FEATURE_GRADE_HAS_GRADE (gradebook integration). Completion flags
- * flip later in Phase 5a (sub-step 4); FEATURE_GRADE_OUTCOMES is v1.1+ scope.
+ * enables FEATURE_GRADE_HAS_GRADE (gradebook integration). Phase 5a.4
+ * enables FEATURE_COMPLETION_TRACKS_VIEWS and FEATURE_COMPLETION_HAS_RULES
+ * (the completionsubmit custom rule per SPEC §9.3). FEATURE_GRADE_OUTCOMES
+ * is v1.1+ scope.
  *
  * @param string $feature FEATURE_xx constant.
  * @return mixed True/false/feature constant; null for unknown features.
@@ -42,8 +44,8 @@ function scorecard_supports($feature) {
         FEATURE_GROUPINGS => true,
         FEATURE_MOD_PURPOSE => MOD_PURPOSE_ASSESSMENT,
         FEATURE_BACKUP_MOODLE2 => true,
-        FEATURE_COMPLETION_TRACKS_VIEWS => false,
-        FEATURE_COMPLETION_HAS_RULES => false,
+        FEATURE_COMPLETION_TRACKS_VIEWS => true,
+        FEATURE_COMPLETION_HAS_RULES => true,
         FEATURE_GRADE_HAS_GRADE => true,
         FEATURE_GRADE_OUTCOMES => false,
         default => null,

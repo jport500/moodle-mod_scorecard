@@ -225,11 +225,13 @@ final class lib_test extends \advanced_testcase {
         // Phase 1.4 flipped backup support to true.
         $this->assertTrue(scorecard_supports(FEATURE_BACKUP_MOODLE2));
 
-        // Phase 5a.1 flipped FEATURE_GRADE_HAS_GRADE to true. Completion
-        // flips later in Phase 5a (sub-step 4); FEATURE_GRADE_OUTCOMES
-        // stays off (v1.1+ scope).
+        // Phase 5a.1 flipped FEATURE_GRADE_HAS_GRADE to true. Phase 5a.4
+        // flipped FEATURE_COMPLETION_TRACKS_VIEWS and
+        // FEATURE_COMPLETION_HAS_RULES (the completionsubmit custom rule
+        // per SPEC §9.3). FEATURE_GRADE_OUTCOMES stays off (v1.1+ scope).
         $this->assertTrue(scorecard_supports(FEATURE_GRADE_HAS_GRADE));
-        $this->assertFalse(scorecard_supports(FEATURE_COMPLETION_HAS_RULES));
+        $this->assertTrue(scorecard_supports(FEATURE_COMPLETION_TRACKS_VIEWS));
+        $this->assertTrue(scorecard_supports(FEATURE_COMPLETION_HAS_RULES));
         $this->assertFalse(scorecard_supports(FEATURE_GRADE_OUTCOMES));
 
         $this->assertNull(scorecard_supports('unknown_feature_xyz'));

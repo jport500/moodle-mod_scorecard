@@ -85,5 +85,32 @@ function xmldb_scorecard_upgrade(int $oldversion): bool {
         upgrade_mod_savepoint(true, 2026042602, 'scorecard');
     }
 
+    if ($oldversion < 2026042701) {
+        // Phase 5a.4: add completionsubmit column to mdl_scorecard for the
+        // custom completion rule (SPEC §9.3 "complete when learner submits
+        // at least one attempt"). Existing scorecards default to 0
+        // (no auto-complete-on-submit) — operators see the new checkbox in
+        // the activity edit form and explicitly opt in. New scorecards
+        // default to 1 via mod_form (operator-friendly for self-assessments
+        // where the natural completion criterion is "they submitted").
+        $dbman = $DB->get_manager();
+        $table = new xmldb_table('scorecard');
+        $field = new xmldb_field(
+            'completionsubmit',
+            XMLDB_TYPE_INTEGER,
+            '1',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '0',
+            'grade'
+        );
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        upgrade_mod_savepoint(true, 2026042701, 'scorecard');
+    }
+
     return true;
 }

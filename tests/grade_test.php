@@ -595,4 +595,92 @@ final class grade_test extends \advanced_testcase {
             'No grade item should exist for gradeenabled=0 scorecard after submit.'
         );
     }
+
+    /**
+     * Submitting an attempt with completionsubmit=1 marks the cm complete
+     * for the user (SPEC §9.3). Phase 5a.4 hook in
+     * scorecard_handle_submission calls completion_info::update_state when
+     * the cm has completion tracking enabled and the rule is set.
+     */
+    public function test_completion_complete_after_submit_when_completionsubmit_enabled(): void {
+        $this->resetAfterTest();
+
+        $course = $this->getDataGenerator()->create_course(['enablecompletion' => 1]);
+        $scorecard = $this->getDataGenerator()->create_module(
+            'scorecard',
+            (object)[
+                'course' => $course->id,
+                'name' => 'Completion test',
+                'gradeenabled' => 1,
+                'grade' => 10,
+                'scalemin' => 1,
+                'scalemax' => 10,
+                'completion' => COMPLETION_TRACKING_AUTOMATIC,
+                'completionsubmit' => 1,
+            ]
+        );
+        $itemid = $this->add_visible_item((int)$scorecard->id);
+        $user = $this->getDataGenerator()->create_user();
+        $cm = $this->get_cm_for_scorecard($scorecard);
+
+        $result = scorecard_handle_submission(
+            $scorecard,
+            $cm,
+            (int)$user->id,
+            [$itemid => 7]
+        );
+        $this->assertSame('submitted', $result['status']);
+
+        $completion = new \completion_info($course);
+        $cmdata = $completion->get_data($cm, false, (int)$user->id);
+        $this->assertEquals(
+            COMPLETION_COMPLETE,
+            (int)$cmdata->completionstate,
+            'Activity should be marked complete after submit with completionsubmit=1.'
+        );
+    }
+
+    /**
+     * Submitting an attempt with completionsubmit=0 does NOT mark the cm
+     * complete. The hook in scorecard_handle_submission gates on
+     * !empty($scorecard->completionsubmit) and does not fire update_state
+     * when the rule is disabled.
+     */
+    public function test_completion_incomplete_when_completionsubmit_disabled(): void {
+        $this->resetAfterTest();
+
+        $course = $this->getDataGenerator()->create_course(['enablecompletion' => 1]);
+        $scorecard = $this->getDataGenerator()->create_module(
+            'scorecard',
+            (object)[
+                'course' => $course->id,
+                'name' => 'Completion test (disabled)',
+                'gradeenabled' => 1,
+                'grade' => 10,
+                'scalemin' => 1,
+                'scalemax' => 10,
+                'completion' => COMPLETION_TRACKING_AUTOMATIC,
+                'completionsubmit' => 0,
+            ]
+        );
+        $itemid = $this->add_visible_item((int)$scorecard->id);
+        $user = $this->getDataGenerator()->create_user();
+        $cm = $this->get_cm_for_scorecard($scorecard);
+
+        $result = scorecard_handle_submission(
+            $scorecard,
+            $cm,
+            (int)$user->id,
+            [$itemid => 7]
+        );
+        $this->assertSame('submitted', $result['status']);
+
+        $completion = new \completion_info($course);
+        $cmdata = $completion->get_data($cm, false, (int)$user->id);
+        $this->assertEquals(
+            COMPLETION_INCOMPLETE,
+            (int)$cmdata->completionstate,
+            'Activity should not be auto-completed when completionsubmit=0.'
+        );
+    }
 }
