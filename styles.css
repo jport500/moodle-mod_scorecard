@@ -101,7 +101,10 @@
 
 /* Phase 4.2: per-attempt expandable detail block on the report table. Layout
  * scope only; visual treatments (text-muted, fst-italic, text-danger) come
- * from Bootstrap utility classes applied inline in the renderer. */
+ * from Bootstrap utility classes applied inline in the renderer. All four
+ * selectors are scoped under .scorecard-report-table so the .scorecard-
+ * attempt-detail-* generic-looking class names cannot leak into other
+ * contexts (Phase 4.6 scope-prefix consistency pass). */
 .scorecard-report-table .scorecard-attempt-detail {
     margin: 0;
 }
@@ -111,12 +114,12 @@
     font-size: 0.875rem;
 }
 
-.scorecard-attempt-detail-body {
+.scorecard-report-table .scorecard-attempt-detail-body {
     margin-top: 0.5rem;
     padding-left: 0.25rem;
 }
 
-.scorecard-attempt-detail-item {
+.scorecard-report-table .scorecard-attempt-detail-item {
     margin: 0.25rem 0;
     line-height: 1.4;
 }
