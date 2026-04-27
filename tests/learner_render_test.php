@@ -343,6 +343,47 @@ final class learner_render_test extends \advanced_testcase {
     }
 
     /**
+     * No "Add items" affordance for plain learners (canmanage=false default).
+     */
+    public function test_no_items_omits_manage_link_when_canmanage_false(): void {
+        global $PAGE;
+        $this->resetAfterTest();
+        $PAGE->set_url('/mod/scorecard/view.php');
+        $PAGE->set_context(\context_system::instance());
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+
+        $noitems = $renderer->render_learner_no_items(false, 42);
+
+        $this->assertStringNotContainsString('manage.php', $noitems);
+        $this->assertStringNotContainsString(
+            get_string('view:manageitemslink', 'mod_scorecard'),
+            $noitems
+        );
+    }
+
+    /**
+     * "Add items" affordance surfaces when canmanage=true (admins, managers,
+     * editing-teachers who also satisfy :submit). Link points at the items tab.
+     */
+    public function test_no_items_renders_manage_link_when_canmanage_true(): void {
+        global $PAGE;
+        $this->resetAfterTest();
+        $PAGE->set_url('/mod/scorecard/view.php');
+        $PAGE->set_context(\context_system::instance());
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+
+        $noitems = $renderer->render_learner_no_items(true, 42);
+
+        $this->assertStringContainsString('manage.php', $noitems);
+        $this->assertStringContainsString('id=42', $noitems);
+        $this->assertStringContainsString('tab=items', $noitems);
+        $this->assertStringContainsString(
+            get_string('view:manageitemslink', 'mod_scorecard'),
+            $noitems
+        );
+    }
+
+    /**
      * Phase 3 lang strings introduced in 3.1 resolve cleanly.
      */
     public function test_phase3_lang_strings_resolve(): void {

@@ -69,7 +69,13 @@ if (has_capability('mod/scorecard:submit', $context)) {
     $items = scorecard_get_visible_items((int)$scorecard->id);
 
     if (!$items) {
-        echo $renderer->render_learner_no_items();
+        // Site admins satisfy :submit and :manage, so they reach this branch
+        // before the manage-only branch below. Pass $canmanage so the renderer
+        // can append an "Add items" affordance for users who can author.
+        echo $renderer->render_learner_no_items(
+            has_capability('mod/scorecard:manage', $context),
+            (int)$cm->id
+        );
     } else if (scorecard_user_has_attempt((int)$scorecard->id, (int)$USER->id)) {
         if (empty($scorecard->allowretakes)) {
             if (empty($scorecard->showresult)) {

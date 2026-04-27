@@ -449,16 +449,44 @@ class renderer extends plugin_renderer_base {
     /**
      * Render the empty-state notice when the scorecard has no visible items.
      *
-     * Used by view.php's learner branch when scorecard_get_visible_items()
+     * Used by view.php's submit-capable branch when scorecard_get_visible_items()
      * returns an empty array — typically because the teacher has not yet
-     * authored any items, or all items are hidden as drafts. Distinct from
-     * the manager-facing empty state (which links to the manage screen).
+     * authored any items, or all items are hidden as drafts.
      *
+     * Site admins (and other users who satisfy both :submit and :manage) hit
+     * view.php's submit branch first by capability ordering, so this method
+     * surfaces a "manage scorecard" affordance when $canmanage is true. Without
+     * the affordance, an admin creating a fresh scorecard would land on a
+     * dead-end "isn't ready yet" notice with no path to the authoring screen.
+     * The manager-only branch on view.php (no :submit capability) renders its
+     * own copy + plain link and does not call this method.
+     *
+     * @param bool $canmanage True when the viewer also has mod/scorecard:manage.
+     *                        Default false preserves the pre-fix learner-only behavior.
+     * @param int|null $cmid Course module id; required when $canmanage is true so
+     *                       the button can link to manage.php. Ignored otherwise.
      * @return string Rendered HTML notice.
      */
-    public function render_learner_no_items(): string {
+    public function render_learner_no_items(bool $canmanage = false, ?int $cmid = null): string {
+        $body = get_string('view:noitems_learner', 'mod_scorecard');
+
+        if ($canmanage && $cmid !== null) {
+            $manageurl = new moodle_url('/mod/scorecard/manage.php', [
+                'id' => $cmid,
+                'tab' => 'items',
+            ]);
+            $body .= html_writer::div(
+                html_writer::link(
+                    $manageurl,
+                    get_string('view:manageitemslink', 'mod_scorecard'),
+                    ['class' => 'btn btn-primary']
+                ),
+                'mt-3'
+            );
+        }
+
         return html_writer::div(
-            get_string('view:noitems_learner', 'mod_scorecard'),
+            $body,
             'scorecard-noitems alert alert-info'
         );
     }
