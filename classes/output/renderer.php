@@ -698,6 +698,132 @@ class renderer extends plugin_renderer_base {
     }
 
     /**
+     * Render the manager-facing report table.
+     *
+     * Columns per SPEC §10.4: learner name (fullname), userid + username (always),
+     * the per-policy identity fields from \core_user\fields::for_identity(),
+     * attempt number, submitted date, total score, max score, percentage, and the
+     * snapshotted band label. Percentage ALWAYS renders here regardless of
+     * $scorecard->showpercentage -- SPEC §10.4 line 476 -- which is a different
+     * gate from the result page's percentage display.
+     *
+     * Snapshot-only reads: bandlabelsnapshot is the displayed band identifier; no
+     * JOIN to live bands. Same rule SPEC §11.2 establishes for the result page.
+     *
+     * Identity columns: header text comes from \core_user\fields::get_display_name()
+     * so language-pack overrides for field labels Just Work; cells read directly
+     * from the joined row (helpered in scorecard_get_attempts).
+     *
+     * Empty $attempts is the responsibility of the caller -- report.php branches
+     * to render_report_empty_state() before this method is called.
+     *
+     * @param \stdClass $scorecard Scorecard config row (used for activity heading
+     *                             context; the percentage gate is not consulted
+     *                             here per the always-show rule above).
+     * @param array $attempts Attempt rows from scorecard_get_attempts() -- already
+     *                        joined to user identity fields and ordered.
+     * @param string[] $identityfields Per-policy identity field names from
+     *                                 \core_user\fields::get_identity_fields(),
+     *                                 e.g. ['email', 'idnumber', 'department'].
+     * @return string Rendered HTML table.
+     */
+    public function render_report_table(
+        \stdClass $scorecard,
+        array $attempts,
+        array $identityfields
+    ): string {
+        $headers = [
+            html_writer::tag('th', get_string('report:col:fullname', 'mod_scorecard'), ['scope' => 'col']),
+            html_writer::tag('th', get_string('report:col:userid', 'mod_scorecard'), ['scope' => 'col']),
+            html_writer::tag('th', get_string('report:col:username', 'mod_scorecard'), ['scope' => 'col']),
+        ];
+        foreach ($identityfields as $field) {
+            $headers[] = html_writer::tag(
+                'th',
+                s(\core_user\fields::get_display_name($field)),
+                ['scope' => 'col']
+            );
+        }
+        $headers[] = html_writer::tag('th', get_string('report:col:attemptnumber', 'mod_scorecard'), ['scope' => 'col']);
+        $headers[] = html_writer::tag('th', get_string('report:col:submitted', 'mod_scorecard'), ['scope' => 'col']);
+        $headers[] = html_writer::tag('th', get_string('report:col:totalscore', 'mod_scorecard'), ['scope' => 'col']);
+        $headers[] = html_writer::tag('th', get_string('report:col:maxscore', 'mod_scorecard'), ['scope' => 'col']);
+        $headers[] = html_writer::tag('th', get_string('report:col:percentage', 'mod_scorecard'), ['scope' => 'col']);
+        $headers[] = html_writer::tag('th', get_string('report:col:band', 'mod_scorecard'), ['scope' => 'col']);
+
+        $thead = html_writer::tag('thead', html_writer::tag('tr', implode('', $headers)));
+
+        $bodyrows = [];
+        foreach ($attempts as $row) {
+            $cells = [];
+
+            // Always-shown identity columns. fullname() reads firstname/lastname etc.
+            // from the row directly because for_identity()->with_name()->get_sql('u', true)
+            // selected them with their natural names.
+            $cells[] = html_writer::tag('td', fullname($row));
+            $cells[] = html_writer::tag('td', (int)$row->userid);
+            $cells[] = html_writer::tag('td', s((string)($row->username ?? '')));
+
+            // Optional identity columns per site policy.
+            foreach ($identityfields as $field) {
+                $value = $row->{$field} ?? '';
+                $cells[] = html_writer::tag('td', s((string)$value));
+            }
+
+            // Attempt metadata.
+            $cells[] = html_writer::tag('td', (int)$row->attemptnumber);
+            $cells[] = html_writer::tag('td', userdate((int)$row->timecreated));
+            $cells[] = html_writer::tag('td', (int)$row->totalscore);
+            $cells[] = html_writer::tag('td', (int)$row->maxscore);
+
+            // Percentage: rounded to integer for display, matching the result page's
+            // round-half-away-from-zero convention. ALWAYS rendered here regardless
+            // of $scorecard->showpercentage.
+            $rounded = (int)round((float)$row->percentage);
+            $cells[] = html_writer::tag(
+                'td',
+                get_string('report:percentageformat', 'mod_scorecard', $rounded)
+            );
+
+            // Band label snapshot. When the attempt fell back (no band match),
+            // bandlabelsnapshot is null -- display the no-band placeholder instead.
+            $bandlabel = !empty($row->bandlabelsnapshot)
+                ? format_string((string)$row->bandlabelsnapshot)
+                : html_writer::span(
+                    get_string('report:col:noband', 'mod_scorecard'),
+                    'text-muted fst-italic'
+                );
+            $cells[] = html_writer::tag('td', $bandlabel);
+
+            $bodyrows[] = html_writer::tag('tr', implode('', $cells));
+        }
+
+        $tbody = html_writer::tag('tbody', implode('', $bodyrows));
+
+        return html_writer::tag(
+            'table',
+            $thead . $tbody,
+            ['class' => 'generaltable scorecard-report-table']
+        );
+    }
+
+    /**
+     * Render the friendly "no attempts yet" notice.
+     *
+     * Used by report.php when scorecard_get_attempts() returns an empty array.
+     * Distinct from the manage screen's items / bands empty states because the
+     * call to action here is "wait for learners," not "add more authoring."
+     *
+     * @return string Rendered HTML notice.
+     */
+    public function render_report_empty_state(): string {
+        return html_writer::div(
+            get_string('report:empty', 'mod_scorecard'),
+            'scorecard-report-empty alert alert-info'
+        );
+    }
+
+    /**
      * Render the bands list with empty-state and "Add a band" button.
      *
      * Bands display by minscore ASC (natural numeric order). Soft-deleted bands

@@ -633,6 +633,76 @@ function scorecard_compute_attempt_data(
 }
 
 /**
+ * Fetch attempts for a scorecard with user identity fields joined, ordered for the report.
+ *
+ * Single source of truth for the Phase 4 report-page row set. Joins {user} so the
+ * caller can render fullname() and the identity columns dictated by SPEC §10.4
+ * without a per-row second query.
+ *
+ * Identity columns: SPEC §10.4 mandates `\core_user\fields::for_identity($context)`
+ * for the optional set (email, idnumber, department, institution, custom profile
+ * fields), plus userid + username always — username because downstream operators
+ * need it as a join key into other LMS data. Name fields (firstname, lastname,
+ * etc.) are pulled via `with_name()` so fullname() at render time renders correctly
+ * regardless of site naming convention.
+ *
+ * Sort order: userid ASC, attemptnumber ASC (per Phase 4 pre-flag #7). Multiple
+ * attempts per user appear together, sorted by attempt number ascending. Sortable
+ * column controls are out of scope for MVP -- this is the default and only sort.
+ *
+ * Group filter: $groupid is accepted as a contract for Phase 4.3 wiring but is a
+ * no-op in 4.1. The signature is locked now to avoid churn at the report.php call
+ * site when 4.3 plugs in groups_get_activity_group() integration.
+ *
+ * Snapshot-only reads: the helper does NOT join {scorecard_bands}. Reports display
+ * the attempt's bandlabelsnapshot column, not the live band -- SPEC §11.2 carries
+ * forward into reports.
+ *
+ * @param \context $context Module context, used by for_identity() to honour the
+ *                          per-context identity policy.
+ * @param int $scorecardid
+ * @param int|null $groupid Phase 4.3 wires this through; 4.1 ignores it.
+ * @return array<int, \stdClass> Attempt rows with user fields joined, ordered by
+ *                               userid ASC, attemptnumber ASC. Returns empty
+ *                               array when no attempts exist.
+ */
+function scorecard_get_attempts(\context $context, int $scorecardid, ?int $groupid = null): array {
+    global $DB;
+
+    // The for_identity() call resolves the field list per the site's
+    // $CFG->showuseridentity and the context's local override. with_name()
+    // ensures fullname() has every language-dependent name component available
+    // without a second query.
+    $userfieldsapi = \core_user\fields::for_identity($context, true)->with_name();
+    $userfields = $userfieldsapi->get_sql('u', true);
+
+    $sql = "SELECT a.id AS attemptid,
+                   a.scorecardid,
+                   a.userid,
+                   a.attemptnumber,
+                   a.totalscore,
+                   a.maxscore,
+                   a.percentage,
+                   a.bandid,
+                   a.bandlabelsnapshot,
+                   a.bandmessagesnapshot,
+                   a.bandmessageformatsnapshot,
+                   a.timecreated,
+                   a.timemodified,
+                   u.username
+                   {$userfields->selects}
+            FROM {scorecard_attempts} a
+            JOIN {user} u ON u.id = a.userid
+            {$userfields->joins}
+           WHERE a.scorecardid = :scorecardid
+        ORDER BY a.userid ASC, a.attemptnumber ASC, a.id ASC";
+
+    $params = ['scorecardid' => $scorecardid] + $userfields->params;
+
+    return array_values($DB->get_records_sql($sql, $params));
+}
+
+/**
  * Validate, score, and persist a learner submission inside a single transaction.
  *
  * The HTTP entry point at /mod/scorecard/submit.php owns the auth boundary

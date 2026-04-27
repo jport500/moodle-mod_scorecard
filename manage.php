@@ -58,6 +58,13 @@ if (!in_array($tab, $validtabs, true)) {
     $tab = 'items';
 }
 
+// Reports is its own top-level page (SPEC §7.2 file structure; Phase 4 Q1 (a)).
+// The tab is preserved on manage.php for nav continuity but routes to report.php
+// before header output so no manage chrome flashes during the redirect.
+if ($tab === 'reports') {
+    redirect(new moodle_url('/mod/scorecard/report.php', ['id' => $cm->id]));
+}
+
 $tabbaseurl = new moodle_url('/mod/scorecard/manage.php', ['id' => $cm->id, 'tab' => $tab]);
 
 // Items-tab side effects (move, confirmed delete, form submit) execute BEFORE any
@@ -341,13 +348,6 @@ switch ($tab) {
             'minscore ASC, id ASC'
         );
         echo $renderer->render_bands_list($bands, $tabbaseurl);
-        break;
-
-    case 'reports':
-        echo $OUTPUT->notification(
-            get_string('manage:reports:phase4placeholder', 'mod_scorecard'),
-            \core\output\notification::NOTIFY_INFO
-        );
         break;
 }
 
