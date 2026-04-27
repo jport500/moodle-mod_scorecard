@@ -1151,3 +1151,24 @@ function scorecard_handle_submission(
         'preselected' => [],
     ];
 }
+
+/**
+ * Compute the auto-grademax for a scorecard from its visible items.
+ *
+ * Per SPEC §9.2: when gradeenabled is on and $scorecard->grade is 0,
+ * grademax defaults to visible item count × scalemax. Used by
+ * scorecard_grade_item_update when computing the grade item's grademax
+ * param. Phase 5a.2 will hook this from items-CRUD lifecycle functions
+ * to recompute on item add/remove while no attempts exist.
+ *
+ * Returns 0 when the scorecard has no visible items; the caller
+ * (grade_item_update) treats 0 as "no grademax yet" and falls back to
+ * GRADE_TYPE_NONE until items are added.
+ *
+ * @param \stdClass $scorecard Scorecard activity record (id and scalemax read).
+ * @return int Visible item count × scalemax; 0 when no visible items.
+ */
+function scorecard_compute_auto_grademax(\stdClass $scorecard): int {
+    $items = scorecard_get_visible_items((int)$scorecard->id);
+    return count($items) * (int)$scorecard->scalemax;
+}
