@@ -61,6 +61,7 @@ $PAGE->set_url('/mod/scorecard/submit.php');
 $PAGE->set_title(format_string($scorecard->name));
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_context($context);
+$PAGE->add_body_class('limitedwidth');
 
 /** @var \mod_scorecard\output\renderer $renderer */
 $renderer = $PAGE->get_renderer('mod_scorecard');

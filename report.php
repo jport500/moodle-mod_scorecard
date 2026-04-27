@@ -66,6 +66,7 @@ $PAGE->set_url($pageurl);
 $PAGE->set_title(format_string($scorecard->name) . ': ' . get_string('report:heading', 'mod_scorecard'));
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_context($context);
+$PAGE->add_body_class('limitedwidth');
 
 // Phase 4.3 group filter. groups_get_activity_group($cm, true) reads/persists
 // the active group via session AND consults moodle/site:accessallgroups

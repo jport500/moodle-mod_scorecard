@@ -54,6 +54,7 @@ $PAGE->set_url('/mod/scorecard/view.php', ['id' => $cm->id]);
 $PAGE->set_title(format_string($scorecard->name));
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_context($context);
+$PAGE->add_body_class('limitedwidth');
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading(format_string($scorecard->name));
