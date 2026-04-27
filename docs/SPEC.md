@@ -2,7 +2,7 @@
 
 *Plugin component: mod_scorecard | Target Moodle: 5.1+ | Prepared for LMS Light*
 
-**Spec version: 0.4** | Date: 2026-04-25 | Status: Post-Phase-1 corrections folded in
+**Spec version: 0.4.2** | Date: 2026-04-27 | Status: Phase 4 closed; Phase 5a grade-method clarification folded in
 
 Purpose: define a reusable Moodle activity module that lets a learner answer scored prompts, calculates a total score, displays a result/interpretation, and optionally writes the score to the gradebook.
 
@@ -424,6 +424,9 @@ Table names use Moodle conventions with prefix `{scorecard...}`. Exact XMLDB def
 - Default gradebook integration is disabled because most scorecards are self-assessments rather than graded tests.
 - When enabled, grade max defaults to visible item count × scalemax, recalculated on item add/remove only while no attempts exist.
 - On attempt submission, write totalscore as the raw grade (not percentage).
+- Grade method: each submission overwrites the gradebook value with the attempt's totalscore (highest/first/average grade methods deferred to v1.1+).
+
+> **Decision (v0.4.2):** Phase 5a kickoff surfaced that §9.2 was silent on grade method. Latest-attempt-overwrites is the implicit reading of the existing "On attempt submission, write totalscore" directive; making it explicit eliminates the ambiguity for future maintainers and removes the need for a grade-method dropdown in mod_form. Highest/first/average grade methods remain v1.1+ scope.
 
 ## 9.3 Completion
 
