@@ -1170,6 +1170,14 @@ function scorecard_handle_submission(
         ],
     ])->trigger();
 
+    // Phase 5a.3: propagate the new attempt's score to the gradebook.
+    // The call is idempotent — when gradeenabled=0, scorecard_update_grades
+    // refreshes the grade item shell (gradetype=NONE) without creating a
+    // usable grade column. Per SPEC §9.2 (Decision v0.4.2), latest-attempt
+    // overwrites: get_user_grades's MAX(id) subquery picks up this
+    // just-committed attempt automatically.
+    scorecard_update_grades($scorecard);
+
     return [
         'status' => 'submitted',
         'errors' => [],

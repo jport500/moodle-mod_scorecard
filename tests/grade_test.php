@@ -66,6 +66,26 @@ final class grade_test extends \advanced_testcase {
     }
 
     /**
+     * Get the course_module record for a scorecard.
+     *
+     * Phase 5a.3 tests need to call scorecard_handle_submission, which
+     * takes a $cm parameter. This helper resolves it from the scorecard
+     * activity record via Moodle's standard cm-aware lookup.
+     *
+     * @param \stdClass $scorecard Scorecard activity record.
+     * @return \stdClass Course module record.
+     */
+    private function get_cm_for_scorecard(\stdClass $scorecard): \stdClass {
+        return \get_coursemodule_from_instance(
+            'scorecard',
+            (int)$scorecard->id,
+            0,
+            false,
+            MUST_EXIST
+        );
+    }
+
+    /**
      * Insert a visible scorecard item directly into the database.
      *
      * @param int $scorecardid Parent scorecard id.
@@ -507,5 +527,72 @@ final class grade_test extends \advanced_testcase {
 
         scorecard_delete_item($itemid1);
         $this->assert_scorecard_grade_item($scorecard, ['grademax' => 20.0]);
+    }
+
+    /**
+     * Submitting an attempt via scorecard_handle_submission propagates the
+     * user's totalscore to the gradebook (Phase 5a.3 hook in the handler
+     * after event trigger). Per SPEC §9.2 (Decision v0.4.2), the
+     * user's grade is the latest attempt's totalscore.
+     */
+    public function test_submit_attempt_propagates_to_gradebook(): void {
+        $this->resetAfterTest();
+        $scorecard = $this->make_scorecard([
+            'gradeenabled' => 1,
+            'grade' => 10,
+            'scalemin' => 1,
+            'scalemax' => 10,
+        ]);
+        $itemid = $this->add_visible_item((int)$scorecard->id);
+        $user = $this->getDataGenerator()->create_user();
+        $cm = $this->get_cm_for_scorecard($scorecard);
+
+        $result = scorecard_handle_submission(
+            $scorecard,
+            $cm,
+            (int)$user->id,
+            [$itemid => 7]
+        );
+        $this->assertSame('submitted', $result['status']);
+
+        $this->assert_scorecard_user_grade($scorecard, (int)$user->id, 7);
+    }
+
+    /**
+     * Submitting an attempt with gradeenabled=0 does NOT create a grade
+     * item in the gradebook. The handler's update_grades call still runs
+     * but is a benign no-op in this case (per the gradetype=NONE
+     * create-vs-update behavior split documented in
+     * test_no_grade_item_when_gradeenabled_disabled_at_creation).
+     */
+    public function test_submit_attempt_does_not_create_gradebook_entry_when_disabled(): void {
+        $this->resetAfterTest();
+        $scorecard = $this->make_scorecard([
+            'gradeenabled' => 0,
+            'scalemin' => 1,
+            'scalemax' => 10,
+        ]);
+        $itemid = $this->add_visible_item((int)$scorecard->id);
+        $user = $this->getDataGenerator()->create_user();
+        $cm = $this->get_cm_for_scorecard($scorecard);
+
+        $result = scorecard_handle_submission(
+            $scorecard,
+            $cm,
+            (int)$user->id,
+            [$itemid => 7]
+        );
+        $this->assertSame('submitted', $result['status']);
+
+        $gradeitem = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'scorecard',
+            'iteminstance' => (int)$scorecard->id,
+            'courseid' => (int)$scorecard->course,
+        ]);
+        $this->assertFalse(
+            $gradeitem,
+            'No grade item should exist for gradeenabled=0 scorecard after submit.'
+        );
     }
 }
