@@ -28,7 +28,9 @@
  * - 4.2 adds the per-attempt expandable detail row (audit-honest itemid lookup).
  * - 4.3 wires group selector + accessallgroups awareness into scorecard_get_attempts.
  * - 4.4 adds the CSV export button (this page) + export.php (the streaming endpoint).
- * - 4.5 swaps the inline render for flexible_table-backed pagination.
+ * - 4.5 swaps the inline render for flexible_table-backed pagination via
+ *   \mod_scorecard\output\report_table; per-page response fetch happens inside
+ *   the subclass's query_db() instead of at this page level.
  *
  * @package    mod_scorecard
  * @copyright  2026 LMS Light
@@ -79,12 +81,6 @@ $groupfilteractive = ($groupid !== null);
 $attempts = scorecard_get_attempts($context, (int)$scorecard->id, $groupid);
 $identityfields = \core_user\fields::get_identity_fields($context, true);
 
-// Phase 4.2: batch-fetch per-attempt responses in a single SQL round-trip so
-// the renderer's per-row detail block doesn't N+1-query.
-$responsesbyattempt = $attempts
-    ? scorecard_get_attempt_responses(array_map(fn($a) => (int)$a->attemptid, $attempts))
-    : [];
-
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('report:heading', 'mod_scorecard'));
 
@@ -115,7 +111,21 @@ if (empty($attempts)) {
             'scorecard-report-actions mb-3'
         );
     }
-    echo $renderer->render_report_table($scorecard, $attempts, $identityfields, $responsesbyattempt);
+
+    // Phase 4.5: paginated table via flexible_table subclass. Default page
+    // size 25 (Phase 4 kickoff Q4 disposition); initials bar disabled (4.5
+    // Q3 disposition). The subclass's query_db() slices attempts and
+    // batch-fetches responses for the visible page only -- avoids the
+    // bandwidth waste of an up-front fetch for all attempts.
+    $table = new \mod_scorecard\output\report_table(
+        'mod_scorecard_report_' . (int)$cm->id,
+        $scorecard,
+        $attempts,
+        $identityfields,
+        $renderer,
+        $pageurl
+    );
+    $table->out(25, false);
 }
 
 echo $OUTPUT->footer();

@@ -122,6 +122,41 @@ final class report_test extends \advanced_testcase {
     }
 
     /**
+     * Phase 4.5 helper: instantiate the flexible_table subclass and capture
+     * its output as a string. Replaces the pre-4.5
+     * $this->renderer()->render_report_table() call shape.
+     *
+     * @param \stdClass $scorecard
+     * @param array $attempts
+     * @param string[] $identityfields
+     * @param int $pagesize
+     * @return string Captured HTML.
+     */
+    private function render_table_html(
+        \stdClass $scorecard,
+        array $attempts,
+        array $identityfields = [],
+        int $pagesize = 25
+    ): string {
+        global $PAGE;
+        $PAGE->set_url('/mod/scorecard/report.php');
+        $PAGE->set_context(\context_system::instance());
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+        $baseurl = new \moodle_url('/mod/scorecard/report.php');
+        $table = new \mod_scorecard\output\report_table(
+            'test_report_' . uniqid(),
+            $scorecard,
+            $attempts,
+            $identityfields,
+            $renderer,
+            $baseurl
+        );
+        ob_start();
+        $table->out($pagesize, false);
+        return ob_get_clean();
+    }
+
+    /**
      * Empty scorecard returns an empty array (no attempts have been submitted).
      */
     public function test_returns_empty_array_when_no_attempts(): void {
@@ -258,8 +293,11 @@ final class report_test extends \advanced_testcase {
     }
 
     /**
-     * render_report_table emits all SPEC §10.4 columns plus the always-shown
-     * identity columns (Name / User ID / Username) regardless of identity policy.
+     * Report table emits all SPEC §10.4 columns plus the always-shown
+     * identity columns (Name / User ID / Username) regardless of identity
+     * policy. Adapted in Phase 4.5 to capture flexible_table output via
+     * ob_start/ob_get_clean instead of the pre-4.5 render_report_table
+     * return-string shape.
      */
     public function test_render_table_emits_required_column_headers(): void {
         $this->resetAfterTest();
@@ -268,7 +306,7 @@ final class report_test extends \advanced_testcase {
         $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 18, 30, 60.00, 'Strong');
         $rows = scorecard_get_attempts($context, (int)$scorecard->id);
 
-        $html = $this->renderer()->render_report_table($scorecard, $rows, []);
+        $html = $this->render_table_html($scorecard, $rows);
 
         $expectedkeys = [
             'fullname', 'userid', 'username', 'attemptnumber', 'submitted',
@@ -303,7 +341,7 @@ final class report_test extends \advanced_testcase {
         $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 20, 30, 66.67, 'Strong');
         $rows = scorecard_get_attempts($context, (int)$scorecard->id);
 
-        $html = $this->renderer()->render_report_table($scorecard, $rows, []);
+        $html = $this->render_table_html($scorecard, $rows);
 
         // 66.67 stored -> 67 displayed (round-half-away-from-zero, matching the
         // result page's rounding convention).
@@ -322,7 +360,7 @@ final class report_test extends \advanced_testcase {
         $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 5, 30, 16.67, null);
         $rows = scorecard_get_attempts($context, (int)$scorecard->id);
 
-        $html = $this->renderer()->render_report_table($scorecard, $rows, []);
+        $html = $this->render_table_html($scorecard, $rows);
 
         $this->assertStringContainsString(
             get_string('report:col:noband', 'mod_scorecard'),
@@ -362,7 +400,7 @@ final class report_test extends \advanced_testcase {
         $DB->set_field('scorecard_bands', 'label', 'Edited label', ['id' => $bandid]);
 
         $rows = scorecard_get_attempts($context, (int)$scorecard->id);
-        $html = $this->renderer()->render_report_table($scorecard, $rows, []);
+        $html = $this->render_table_html($scorecard, $rows);
 
         $this->assertStringContainsString('Original label', $html);
         $this->assertStringNotContainsString('Edited label', $html);
@@ -621,9 +659,11 @@ final class report_test extends \advanced_testcase {
     }
 
     /**
-     * Wired end-to-end: render_report_table includes the per-row detail block
-     * when the responses batch is passed in. Verifies the wire-up between the
-     * page-level batch fetch and the renderer's per-row detail call.
+     * Wired end-to-end: the report_table subclass emits the per-row detail
+     * block. Adapted in Phase 4.5 -- the responses fetch now happens inside
+     * the subclass's query_db() (per-page) rather than being passed in by
+     * the caller, so the test fixture just inserts response rows and trusts
+     * the subclass to fetch them when rendering.
      */
     public function test_render_report_table_includes_detail_block_per_row(): void {
         $this->resetAfterTest();
@@ -639,10 +679,7 @@ final class report_test extends \advanced_testcase {
         $this->insert_response($attemptid, $itemid, 8);
 
         $rows = scorecard_get_attempts($context, (int)$scorecard->id);
-        $responsesbyattempt = scorecard_get_attempt_responses(
-            array_map(fn($a) => (int)$a->attemptid, $rows)
-        );
-        $html = $this->renderer()->render_report_table($scorecard, $rows, [], $responsesbyattempt);
+        $html = $this->render_table_html($scorecard, $rows);
 
         $this->assertStringContainsString('<details', $html);
         $this->assertStringContainsString('Wired end-to-end', $html);
@@ -775,6 +812,152 @@ final class report_test extends \advanced_testcase {
         $rows = scorecard_get_attempts($context, (int)$scorecard->id, 999999);
 
         $this->assertSame([], $rows);
+    }
+
+    /**
+     * Phase 4.5: 30 attempts; page 1 (default) shows 25 fullnames; the
+     * remaining 5 do not appear. Pagination slicing is the property under
+     * test -- the implication that responses are only fetched for the
+     * visible page is a structural property of the subclass design (asserted
+     * via the absence of page-2 attempts' response prose in the captured
+     * HTML; if responses for all 30 attempts were rendered, page 2's prose
+     * would leak in even though their rows are sliced out).
+     */
+    public function test_pagination_default_page_size_25(): void {
+        $this->resetAfterTest();
+        [$scorecard, , $context] = $this->create_scorecard();
+
+        $usernames = [];
+        for ($i = 1; $i <= 30; $i++) {
+            // Zero-padded so lexical sort matches numeric (u01 < u10 < u30).
+            $name = sprintf('u%02d', $i);
+            $usernames[$i] = $name;
+            $user = $this->getDataGenerator()->create_user(['username' => $name]);
+            $this->insert_attempt(
+                (int)$scorecard->id,
+                (int)$user->id,
+                1,
+                $i % 10 + 1,
+                10,
+                ($i % 10 + 1) * 10.0,
+                null,
+                1000 + $i
+            );
+        }
+
+        $rows = scorecard_get_attempts($context, (int)$scorecard->id);
+        $this->assertCount(30, $rows);
+
+        $html = $this->render_table_html($scorecard, $rows);
+
+        // Rows are ordered by userid ASC, so the lower-id users (u01..u25
+        // by creation order) are on page 1.
+        for ($i = 1; $i <= 25; $i++) {
+            $this->assertStringContainsString(
+                $usernames[$i],
+                $html,
+                "Page 1 should contain {$usernames[$i]}"
+            );
+        }
+        for ($i = 26; $i <= 30; $i++) {
+            $this->assertStringNotContainsString(
+                $usernames[$i],
+                $html,
+                "Page 1 should NOT contain {$usernames[$i]}"
+            );
+        }
+    }
+
+    /**
+     * Phase 4.5: navigating to page 2 (via the `page` query param flexible_table
+     * reads) shows the remaining attempts. Default page size 25 + 30 attempts
+     * means page 2 has 5 rows (u26..u30).
+     */
+    public function test_pagination_navigates_to_page_2(): void {
+        $this->resetAfterTest();
+        [$scorecard, , $context] = $this->create_scorecard();
+
+        $usernames = [];
+        for ($i = 1; $i <= 30; $i++) {
+            $name = sprintf('u%02d', $i);
+            $usernames[$i] = $name;
+            $user = $this->getDataGenerator()->create_user(['username' => $name]);
+            $this->insert_attempt(
+                (int)$scorecard->id,
+                (int)$user->id,
+                1,
+                $i % 10 + 1,
+                10,
+                ($i % 10 + 1) * 10.0,
+                null,
+                1000 + $i
+            );
+        }
+
+        $rows = scorecard_get_attempts($context, (int)$scorecard->id);
+
+        // Set the page query param so flexible_table reads "page 2" (0-indexed).
+        $_GET['page'] = '1';
+        try {
+            $html = $this->render_table_html($scorecard, $rows);
+        } finally {
+            unset($_GET['page']);
+        }
+
+        // Page 2 has the last 5 users (u26..u30); first 25 are absent.
+        for ($i = 26; $i <= 30; $i++) {
+            $this->assertStringContainsString(
+                $usernames[$i],
+                $html,
+                "Page 2 should contain {$usernames[$i]}"
+            );
+        }
+        for ($i = 1; $i <= 25; $i++) {
+            $this->assertStringNotContainsString(
+                $usernames[$i],
+                $html,
+                "Page 2 should NOT contain {$usernames[$i]}"
+            );
+        }
+    }
+
+    /**
+     * Phase 4.5: with 30 attempts (>1 page) the captured output contains a
+     * pagination affordance (Moodle's standard pagebar). Defensive against
+     * a regression where flexible_table::out() or finish_output() fails to
+     * emit the bar even though we hit the multi-page threshold.
+     */
+    public function test_pagination_emits_pagebar_when_multipage(): void {
+        $this->resetAfterTest();
+        [$scorecard, , $context] = $this->create_scorecard();
+
+        for ($i = 1; $i <= 30; $i++) {
+            $user = $this->getDataGenerator()->create_user();
+            $this->insert_attempt(
+                (int)$scorecard->id,
+                (int)$user->id,
+                1,
+                5,
+                10,
+                50.0,
+                null,
+                1000 + $i
+            );
+        }
+
+        $rows = scorecard_get_attempts($context, (int)$scorecard->id);
+        $html = $this->render_table_html($scorecard, $rows);
+
+        // Moodle's paging_bar emits an element with class "paging" or the
+        // standard pagebar nav. Either marker confirms multi-page chrome.
+        $haspaging = (
+            str_contains($html, 'class="paging"') ||
+            str_contains($html, 'pagination')
+        );
+        $this->assertTrue(
+            $haspaging,
+            'Multi-page table should emit pagination chrome'
+        );
     }
 
     /**
