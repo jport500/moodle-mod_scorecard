@@ -98,3 +98,25 @@
         justify-content: space-around;
     }
 }
+
+/* Phase 4.2: per-attempt expandable detail block on the report table. Layout
+ * scope only; visual treatments (text-muted, fst-italic, text-danger) come
+ * from Bootstrap utility classes applied inline in the renderer. */
+.scorecard-report-table .scorecard-attempt-detail {
+    margin: 0;
+}
+
+.scorecard-report-table .scorecard-attempt-detail summary {
+    cursor: pointer;
+    font-size: 0.875rem;
+}
+
+.scorecard-attempt-detail-body {
+    margin-top: 0.5rem;
+    padding-left: 0.25rem;
+}
+
+.scorecard-attempt-detail-item {
+    margin: 0.25rem 0;
+    line-height: 1.4;
+}

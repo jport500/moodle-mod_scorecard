@@ -279,6 +279,11 @@ final class report_test extends \advanced_testcase {
                 $html
             );
         }
+        // Phase 4.2: trailing "Detail" column header.
+        $this->assertStringContainsString(
+            get_string('report:detail:heading', 'mod_scorecard'),
+            $html
+        );
     }
 
     /**
@@ -360,5 +365,286 @@ final class report_test extends \advanced_testcase {
 
         $this->assertStringContainsString('Original label', $html);
         $this->assertStringNotContainsString('Edited label', $html);
+    }
+
+    /**
+     * Phase 4.2 helper: insert a response row directly. Bypasses the submit
+     * handler so individual tests can synthesize the (responsevalue, item-state)
+     * combinations they need without driving the full submission flow.
+     */
+    private function insert_response(int $attemptid, int $itemid, int $value): int {
+        global $DB;
+        return (int)$DB->insert_record('scorecard_responses', (object)[
+            'attemptid' => $attemptid,
+            'itemid' => $itemid,
+            'responsevalue' => $value,
+            'timecreated' => time(),
+        ]);
+    }
+
+    /**
+     * scorecard_get_attempt_responses returns an empty array for an empty
+     * attemptids input. Defensive against report.php's "no attempts" branch
+     * also passing empty arrays.
+     */
+    public function test_get_attempt_responses_empty_input_returns_empty(): void {
+        $this->resetAfterTest();
+        $this->assertSame([], scorecard_get_attempt_responses([]));
+    }
+
+    /**
+     * Batch fetch groups responses by attemptid and orders within each group by
+     * item sortorder ASC. Two attempts × three items each round-trips correctly.
+     */
+    public function test_get_attempt_responses_groups_by_attemptid_and_orders_by_sortorder(): void {
+        $this->resetAfterTest();
+        [$scorecard] = $this->create_scorecard();
+        $user = $this->getDataGenerator()->create_user();
+
+        $item1 = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'First',
+            'promptformat' => FORMAT_HTML,
+        ]);
+        $item2 = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Second',
+            'promptformat' => FORMAT_HTML,
+        ]);
+        $item3 = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Third',
+            'promptformat' => FORMAT_HTML,
+        ]);
+
+        $attempt1 = $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 15, 30, 50.0, null);
+        $attempt2 = $this->insert_attempt((int)$scorecard->id, (int)$user->id, 2, 20, 30, 66.67, 'Strong');
+
+        // Insert in deliberately-mixed order; helper must sort by sortorder.
+        $this->insert_response($attempt1, $item3, 7);
+        $this->insert_response($attempt1, $item1, 5);
+        $this->insert_response($attempt1, $item2, 3);
+        $this->insert_response($attempt2, $item2, 6);
+        $this->insert_response($attempt2, $item1, 8);
+        $this->insert_response($attempt2, $item3, 6);
+
+        $grouped = scorecard_get_attempt_responses([$attempt1, $attempt2]);
+
+        $this->assertArrayHasKey($attempt1, $grouped);
+        $this->assertArrayHasKey($attempt2, $grouped);
+        $this->assertCount(3, $grouped[$attempt1]);
+        $this->assertCount(3, $grouped[$attempt2]);
+
+        // Within each attempt, rows ordered by sortorder ASC -> item1, item2, item3.
+        $this->assertSame((int)$item1, (int)$grouped[$attempt1][0]->itemid);
+        $this->assertSame((int)$item2, (int)$grouped[$attempt1][1]->itemid);
+        $this->assertSame((int)$item3, (int)$grouped[$attempt1][2]->itemid);
+        $this->assertSame((int)$item1, (int)$grouped[$attempt2][0]->itemid);
+        $this->assertSame((int)$item2, (int)$grouped[$attempt2][1]->itemid);
+        $this->assertSame((int)$item3, (int)$grouped[$attempt2][2]->itemid);
+
+        // Joined item fields populated from live scorecard_items.
+        $this->assertSame('First', $grouped[$attempt1][0]->prompt);
+        $this->assertSame('Second', $grouped[$attempt1][1]->prompt);
+        $this->assertSame('Third', $grouped[$attempt1][2]->prompt);
+    }
+
+    /**
+     * Soft-deleted items still resolve through the LEFT JOIN -- the row is
+     * retained per the soft-delete pattern, so prompt + deleted=1 come back
+     * for audit-honest detail rendering.
+     */
+    public function test_get_attempt_responses_includes_soft_deleted_items(): void {
+        global $DB;
+        $this->resetAfterTest();
+        [$scorecard] = $this->create_scorecard();
+        $user = $this->getDataGenerator()->create_user();
+
+        $itemid = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Will be deleted',
+            'promptformat' => FORMAT_HTML,
+        ]);
+        $attemptid = $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 5, 10, 50.0, null);
+        $this->insert_response($attemptid, $itemid, 5);
+
+        // Soft-delete the item AFTER the response is recorded.
+        $DB->set_field('scorecard_items', 'deleted', 1, ['id' => $itemid]);
+
+        $grouped = scorecard_get_attempt_responses([$attemptid]);
+
+        $this->assertArrayHasKey($attemptid, $grouped);
+        $this->assertCount(1, $grouped[$attemptid]);
+        $row = $grouped[$attemptid][0];
+        $this->assertSame('Will be deleted', $row->prompt);
+        $this->assertSame(1, (int)$row->deleted);
+        $this->assertSame(5, (int)$row->responsevalue);
+    }
+
+    /**
+     * render_attempt_detail emits one <p> per response inside <details>, with
+     * the prompt rendered as a bold label and the "Response: V of MAX" copy.
+     */
+    public function test_render_attempt_detail_emits_per_item_prose(): void {
+        $this->resetAfterTest();
+        [$scorecard] = $this->create_scorecard();
+        $user = $this->getDataGenerator()->create_user();
+
+        $item1 = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Pace of work',
+            'promptformat' => FORMAT_HTML,
+        ]);
+        $item2 = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Clarity of goals',
+            'promptformat' => FORMAT_HTML,
+        ]);
+        $attemptid = $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 13, 20, 65.0, null);
+        $this->insert_response($attemptid, $item1, 7);
+        $this->insert_response($attemptid, $item2, 6);
+
+        $grouped = scorecard_get_attempt_responses([$attemptid]);
+        $attempt = (object)['id' => $attemptid];
+        $html = $this->renderer()->render_attempt_detail($scorecard, $attempt, $grouped[$attemptid]);
+
+        $this->assertStringContainsString('<details', $html);
+        $this->assertStringContainsString('<summary', $html);
+        $this->assertStringContainsString('Pace of work', $html);
+        $this->assertStringContainsString('Clarity of goals', $html);
+        // Response copy includes scalemax (10 from create_scorecard default).
+        $this->assertStringContainsString('Response: 7 of 10', $html);
+        $this->assertStringContainsString('Response: 6 of 10', $html);
+    }
+
+    /**
+     * Soft-deleted items in the detail block render with the [deleted] prefix
+     * and the whole line de-emphasized via Bootstrap utility classes.
+     */
+    public function test_render_attempt_detail_marks_soft_deleted_items(): void {
+        global $DB;
+        $this->resetAfterTest();
+        [$scorecard] = $this->create_scorecard();
+        $user = $this->getDataGenerator()->create_user();
+
+        $itemid = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Removed prompt',
+            'promptformat' => FORMAT_HTML,
+        ]);
+        $attemptid = $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 4, 10, 40.0, null);
+        $this->insert_response($attemptid, $itemid, 4);
+        $DB->set_field('scorecard_items', 'deleted', 1, ['id' => $itemid]);
+
+        $grouped = scorecard_get_attempt_responses([$attemptid]);
+        $html = $this->renderer()->render_attempt_detail(
+            $scorecard,
+            (object)['id' => $attemptid],
+            $grouped[$attemptid]
+        );
+
+        $this->assertStringContainsString(
+            get_string('report:detail:deletedprefix', 'mod_scorecard'),
+            $html
+        );
+        // Whole-line muted/italic: Bootstrap utility classes applied to the <p>.
+        $this->assertMatchesRegularExpression(
+            '/class="[^"]*text-muted[^"]*fst-italic[^"]*"/',
+            $html
+        );
+    }
+
+    /**
+     * Out-of-range responses (value outside [scalemin, scalemax]) get a
+     * red-flagged suffix. SPEC §4.5 + scorecard_scale_change_allowed() block
+     * scale changes once attempts exist, so the source of out-of-range values
+     * is direct DB tampering or restore mismatches; this defensive flag
+     * surfaces them for audit (closes followup #14).
+     */
+    public function test_render_attempt_detail_flags_out_of_range_response(): void {
+        global $DB;
+        $this->resetAfterTest();
+        [$scorecard] = $this->create_scorecard();
+        $user = $this->getDataGenerator()->create_user();
+
+        $itemid = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Tampered item',
+            'promptformat' => FORMAT_HTML,
+        ]);
+        $attemptid = $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 15, 10, 150.0, null);
+
+        // Direct DB write of an out-of-range value (scalemin=1, scalemax=10).
+        $DB->insert_record('scorecard_responses', (object)[
+            'attemptid' => $attemptid,
+            'itemid' => $itemid,
+            'responsevalue' => 15,
+            'timecreated' => time(),
+        ]);
+
+        $grouped = scorecard_get_attempt_responses([$attemptid]);
+        $html = $this->renderer()->render_attempt_detail(
+            $scorecard,
+            (object)['id' => $attemptid],
+            $grouped[$attemptid]
+        );
+
+        // The danger-styled span carries the out-of-range copy with min/max.
+        $this->assertStringContainsString('text-danger', $html);
+        $expectedrange = get_string('report:detail:outofrange', 'mod_scorecard', (object)[
+            'min' => 1,
+            'max' => 10,
+        ]);
+        $this->assertStringContainsString($expectedrange, $html);
+    }
+
+    /**
+     * Empty $responses argument still yields a valid <details> element with the
+     * summary "View 0 responses" -- defensive against data-corruption / direct
+     * DB tampering where an attempt row exists with no responses.
+     */
+    public function test_render_attempt_detail_emits_details_for_empty_responses(): void {
+        $this->resetAfterTest();
+        [$scorecard] = $this->create_scorecard();
+
+        $html = $this->renderer()->render_attempt_detail(
+            $scorecard,
+            (object)['id' => 0],
+            []
+        );
+
+        $this->assertStringContainsString('<details', $html);
+        $this->assertStringContainsString('<summary', $html);
+        $expectedsummary = get_string('report:detail:summary', 'mod_scorecard', 0);
+        $this->assertStringContainsString($expectedsummary, $html);
+    }
+
+    /**
+     * Wired end-to-end: render_report_table includes the per-row detail block
+     * when the responses batch is passed in. Verifies the wire-up between the
+     * page-level batch fetch and the renderer's per-row detail call.
+     */
+    public function test_render_report_table_includes_detail_block_per_row(): void {
+        $this->resetAfterTest();
+        [$scorecard, , $context] = $this->create_scorecard();
+        $user = $this->getDataGenerator()->create_user(['username' => 'u1']);
+
+        $itemid = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Wired end-to-end',
+            'promptformat' => FORMAT_HTML,
+        ]);
+        $attemptid = $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 8, 10, 80.0, 'Strong');
+        $this->insert_response($attemptid, $itemid, 8);
+
+        $rows = scorecard_get_attempts($context, (int)$scorecard->id);
+        $responsesbyattempt = scorecard_get_attempt_responses(
+            array_map(fn($a) => (int)$a->attemptid, $rows)
+        );
+        $html = $this->renderer()->render_report_table($scorecard, $rows, [], $responsesbyattempt);
+
+        $this->assertStringContainsString('<details', $html);
+        $this->assertStringContainsString('Wired end-to-end', $html);
+        $this->assertStringContainsString('Response: 8 of 10', $html);
     }
 }

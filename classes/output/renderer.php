@@ -717,20 +717,31 @@ class renderer extends plugin_renderer_base {
      * Empty $attempts is the responsibility of the caller -- report.php branches
      * to render_report_empty_state() before this method is called.
      *
-     * @param \stdClass $scorecard Scorecard config row (used for activity heading
-     *                             context; the percentage gate is not consulted
-     *                             here per the always-show rule above).
+     * Phase 4.2 adds a trailing "Detail" column with an inline `<details>` block
+     * per row containing per-item response prose. The responses are batch-fetched
+     * by report.php via scorecard_get_attempt_responses() and passed in via
+     * $responsesbyattempt to avoid an N+1 fetch inside this loop.
+     *
+     * @param \stdClass $scorecard Scorecard config row. scalemin / scalemax read
+     *                             by render_attempt_detail for the per-row
+     *                             out-of-range comparison and the response copy.
      * @param array $attempts Attempt rows from scorecard_get_attempts() -- already
      *                        joined to user identity fields and ordered.
      * @param string[] $identityfields Per-policy identity field names from
      *                                 \core_user\fields::get_identity_fields(),
      *                                 e.g. ['email', 'idnumber', 'department'].
+     * @param array<int, array<int, \stdClass>> $responsesbyattempt Map of attemptid
+     *                  to response rows from scorecard_get_attempt_responses().
+     *                  Attempts missing from the map render with an empty
+     *                  details body (defensive against data corruption; the
+     *                  submit handler always writes responses in practice).
      * @return string Rendered HTML table.
      */
     public function render_report_table(
         \stdClass $scorecard,
         array $attempts,
-        array $identityfields
+        array $identityfields,
+        array $responsesbyattempt = []
     ): string {
         $headers = [
             html_writer::tag('th', get_string('report:col:fullname', 'mod_scorecard'), ['scope' => 'col']),
@@ -750,6 +761,7 @@ class renderer extends plugin_renderer_base {
         $headers[] = html_writer::tag('th', get_string('report:col:maxscore', 'mod_scorecard'), ['scope' => 'col']);
         $headers[] = html_writer::tag('th', get_string('report:col:percentage', 'mod_scorecard'), ['scope' => 'col']);
         $headers[] = html_writer::tag('th', get_string('report:col:band', 'mod_scorecard'), ['scope' => 'col']);
+        $headers[] = html_writer::tag('th', get_string('report:detail:heading', 'mod_scorecard'), ['scope' => 'col']);
 
         $thead = html_writer::tag('thead', html_writer::tag('tr', implode('', $headers)));
 
@@ -795,6 +807,16 @@ class renderer extends plugin_renderer_base {
                 );
             $cells[] = html_writer::tag('td', $bandlabel);
 
+            // Detail cell: inline <details> with per-item response prose. Empty
+            // map entries default to []; render_attempt_detail handles the empty
+            // body case by emitting just the summary.
+            $attemptid = (int)$row->attemptid;
+            $detailresponses = $responsesbyattempt[$attemptid] ?? [];
+            $cells[] = html_writer::tag(
+                'td',
+                $this->render_attempt_detail($scorecard, $row, $detailresponses)
+            );
+
             $bodyrows[] = html_writer::tag('tr', implode('', $cells));
         }
 
@@ -820,6 +842,122 @@ class renderer extends plugin_renderer_base {
         return html_writer::div(
             get_string('report:empty', 'mod_scorecard'),
             'scorecard-report-empty alert alert-info'
+        );
+    }
+
+    /**
+     * Render the expandable per-attempt detail block for the report table.
+     *
+     * Native HTML5 `<details>` element wraps a list of per-item response prose.
+     * Keyboard-accessible (Enter/Space toggles), screen-reader-friendly, no JS,
+     * no ARIA additions needed (Phase 4 kickoff Q3 + pre-flag #2). One `<p>` per
+     * response inside a `<div>` body; summary copy reports the response count.
+     *
+     * Item prompt is read live from `{scorecard_items}` (joined by the helper),
+     * NOT from a snapshot column on `{scorecard_responses}`. SPEC §11.2's snapshot
+     * rule applies to scoring (totalscore, maxscore, percentage) and band display
+     * (bandlabelsnapshot, bandmessagesnapshot, bandmessageformatsnapshot), not to
+     * item prompt text. This matches Phase 3.4's result-page behavior — both
+     * surfaces show current prompt text alongside snapshotted scoring/band values.
+     * If a teacher edits an item's prompt after submissions exist, both the result
+     * page AND the report's detail rows reflect the new prompt. A schema change
+     * to add a per-response prompt snapshot is a v1.x enhancement (followup #21);
+     * not pursued here because the audit-fidelity gap is small in practice and
+     * uniformity with the result page outweighs it.
+     *
+     * Soft-deleted items (item.deleted = 1) render with a `[deleted]` prefix on
+     * the prompt and the whole line de-emphasized via Bootstrap utility classes
+     * (text-muted + fst-italic). The deleted_marker helper used elsewhere wraps
+     * primary text in `<s>` strikethrough; that doesn't compose well with the
+     * prose-with-bold-label shape here, so the visual treatment is rolled inline
+     * specifically for this context.
+     *
+     * Out-of-range responses (responsevalue outside [scalemin, scalemax]) get
+     * a red suffix flag. SPEC §4.5 + scorecard_scale_change_allowed() block scale
+     * changes once attempts exist, so the only sources of out-of-range values are
+     * direct DB tampering or backup/restore mismatches. Defensive flagging is
+     * still valuable for audit. Closes followup #14.
+     *
+     * @param \stdClass $scorecard Scorecard config row -- scalemin / scalemax
+     *                             read for the out-of-range comparison and the
+     *                             "of {scalemax}" suffix in the response copy.
+     * @param \stdClass $attempt Attempt row (currently passed for future use; the
+     *                           4.2 implementation does not read fields off it,
+     *                           but accepting it keeps the signature stable as
+     *                           4.4 / 4.5 evolve the detail block).
+     * @param array $responses Response rows from scorecard_get_attempt_responses;
+     *                         each row has responsevalue plus joined item fields
+     *                         (prompt, promptformat, deleted, sortorder). Already
+     *                         ordered by sortorder ASC.
+     * @return string Rendered HTML.
+     */
+    public function render_attempt_detail(
+        \stdClass $scorecard,
+        \stdClass $attempt,
+        array $responses
+    ): string {
+        unset($attempt);
+
+        $scalemin = (int)$scorecard->scalemin;
+        $scalemax = (int)$scorecard->scalemax;
+        $count = count($responses);
+
+        $summary = html_writer::tag(
+            'summary',
+            get_string('report:detail:summary', 'mod_scorecard', $count)
+        );
+
+        $rowshtml = '';
+        foreach ($responses as $row) {
+            $value = (int)$row->responsevalue;
+            $isdeleted = !empty($row->deleted);
+            $outofrange = ($value < $scalemin || $value > $scalemax);
+
+            // The format_string call strips block-level tags so the prompt
+            // composes cleanly inside <strong>. Reports are an audit-context
+            // label; rich formatting belongs on the learner-facing result page.
+            $promptdisplay = format_string((string)($row->prompt ?? ''));
+            if ($isdeleted) {
+                $promptdisplay = get_string('report:detail:deletedprefix', 'mod_scorecard') . $promptdisplay;
+            }
+            $prompthtml = html_writer::tag('strong', $promptdisplay);
+
+            $responsecopy = get_string('report:detail:response', 'mod_scorecard', (object)[
+                'value' => $value,
+                'scalemax' => $scalemax,
+            ]);
+
+            $rangesuffix = '';
+            if ($outofrange) {
+                $rangesuffix = html_writer::span(
+                    get_string('report:detail:outofrange', 'mod_scorecard', (object)[
+                        'min' => $scalemin,
+                        'max' => $scalemax,
+                    ]),
+                    'text-danger'
+                );
+            }
+
+            $itemclass = 'scorecard-attempt-detail-item';
+            if ($isdeleted) {
+                $itemclass .= ' is-deleted text-muted fst-italic';
+            }
+
+            $rowshtml .= html_writer::tag(
+                'p',
+                $prompthtml . ': ' . $responsecopy . $rangesuffix,
+                ['class' => $itemclass]
+            );
+        }
+
+        $body = $rowshtml === ''
+            ? ''
+            : html_writer::div($rowshtml, 'scorecard-attempt-detail-body');
+
+        return html_writer::tag(
+            'details',
+            $summary . $body,
+            ['class' => 'scorecard-attempt-detail']
         );
     }
 

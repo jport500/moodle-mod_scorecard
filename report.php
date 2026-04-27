@@ -71,6 +71,12 @@ $groupid = null;
 $attempts = scorecard_get_attempts($context, (int)$scorecard->id, $groupid);
 $identityfields = \core_user\fields::get_identity_fields($context, true);
 
+// Phase 4.2: batch-fetch per-attempt responses in a single SQL round-trip so
+// the renderer's per-row detail block doesn't N+1-query.
+$responsesbyattempt = $attempts
+    ? scorecard_get_attempt_responses(array_map(fn($a) => (int)$a->attemptid, $attempts))
+    : [];
+
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('report:heading', 'mod_scorecard'));
 
@@ -78,7 +84,7 @@ $renderer = $PAGE->get_renderer('mod_scorecard');
 if (empty($attempts)) {
     echo $renderer->render_report_empty_state();
 } else {
-    echo $renderer->render_report_table($scorecard, $attempts, $identityfields);
+    echo $renderer->render_report_table($scorecard, $attempts, $identityfields, $responsesbyattempt);
 }
 
 echo $OUTPUT->footer();

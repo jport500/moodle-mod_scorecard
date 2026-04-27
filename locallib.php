@@ -703,6 +703,73 @@ function scorecard_get_attempts(\context $context, int $scorecardid, ?int $group
 }
 
 /**
+ * Fetch per-attempt response rows for a batch of attempts, joined to live items.
+ *
+ * Phase 4.2 expandable detail block: report.php loads attempts via
+ * scorecard_get_attempts() then calls this with array_column($attempts, 'attemptid')
+ * to get every response in one round-trip. Avoids the N+1 antipattern that would
+ * arise from per-row fetches inside the renderer loop.
+ *
+ * Live prompt reads (Phase 4.2 Type A option I): the SQL LEFT JOINs scorecard_items
+ * to surface the current prompt text, promptformat, deleted flag, and sortorder.
+ * scorecard_responses has no per-row prompt snapshot column -- adding one would be
+ * a v1.x schema change (followup #21). The behavior matches Phase 3.4's result page,
+ * which also reads live item prompts. If a teacher edits an item's prompt after
+ * submissions exist, both surfaces show the new text alongside the snapshotted
+ * scoring/band values.
+ *
+ * Soft-deleted items still resolve through the join (deleted=1, row retained for
+ * historical detail). Hard-deleted items would land NULL on the joined columns;
+ * SPEC §4.5's lifecycle gate prevents hard-delete once attempts exist, so this
+ * is a defensive case rather than an expected one. ORDER BY sortorder uses
+ * COALESCE(..., 999999) to push any NULL sortorder rows to the end deterministically.
+ *
+ * @param int[] $attemptids Attempt ids to batch-fetch responses for.
+ * @return array<int, array<int, \stdClass>> Map of attemptid => list of response
+ *         rows, each row carrying responseid, attemptid, itemid, responsevalue,
+ *         timecreated, prompt, promptformat, deleted, sortorder. Attempts with no
+ *         responses (or missing from input) do NOT appear in the map; callers
+ *         should default to [] for unmapped attemptids.
+ */
+function scorecard_get_attempt_responses(array $attemptids): array {
+    global $DB;
+
+    if (empty($attemptids)) {
+        return [];
+    }
+
+    [$insql, $inparams] = $DB->get_in_or_equal($attemptids, SQL_PARAMS_NAMED, 'aid');
+
+    $sql = "SELECT r.id AS responseid,
+                   r.attemptid,
+                   r.itemid,
+                   r.responsevalue,
+                   r.timecreated,
+                   i.prompt,
+                   i.promptformat,
+                   i.deleted,
+                   i.sortorder
+              FROM {scorecard_responses} r
+         LEFT JOIN {scorecard_items} i ON i.id = r.itemid
+             WHERE r.attemptid {$insql}
+          ORDER BY r.attemptid ASC,
+                   COALESCE(i.sortorder, 999999) ASC,
+                   r.id ASC";
+
+    $rows = $DB->get_records_sql($sql, $inparams);
+
+    $grouped = [];
+    foreach ($rows as $row) {
+        $aid = (int)$row->attemptid;
+        if (!isset($grouped[$aid])) {
+            $grouped[$aid] = [];
+        }
+        $grouped[$aid][] = $row;
+    }
+    return $grouped;
+}
+
+/**
  * Validate, score, and persist a learner submission inside a single transaction.
  *
  * The HTTP entry point at /mod/scorecard/submit.php owns the auth boundary
