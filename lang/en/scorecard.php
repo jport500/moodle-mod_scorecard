@@ -150,6 +150,7 @@ $string['submit:error:missing'] = 'Please answer this item.';
 $string['submit:error:noitems'] = 'This scorecard has no scorable items right now. Please contact your facilitator.';
 $string['submit:error:outofrange'] = 'The selected response is outside the allowed range for this scorecard.';
 $string['submit:notify:duplicate'] = 'You have already submitted this scorecard.';
+$string['view:manage_affordance'] = 'Manage scorecard';
 $string['view:manageitemslink'] = 'Add items and result bands';
 $string['view:noitems_learner'] = 'This scorecard isn\'t ready yet. Please check back later.';
 $string['view:noitems_manager'] = 'No items configured yet. Add scored prompts and result bands from the manage page.';

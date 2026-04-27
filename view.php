@@ -62,16 +62,25 @@ if (!empty($scorecard->intro)) {
     echo $OUTPUT->box(format_module_intro('scorecard', $scorecard, $cm->id), 'generalbox', 'intro');
 }
 
-if (has_capability('mod/scorecard:submit', $context)) {
-    /** @var \mod_scorecard\output\renderer $renderer */
-    $renderer = $PAGE->get_renderer('mod_scorecard');
+/** @var \mod_scorecard\output\renderer $renderer */
+$renderer = $PAGE->get_renderer('mod_scorecard');
 
+// Persistent manage affordance, hoisted ABOVE the :submit-vs-:manage branch
+// split so both populations inherit it: site admins and editing-teachers
+// who satisfy :submit reach the submit-capable leaves below; default
+// Teacher / Manager roles without :submit reach the :manage-only branch.
+// Either way they're authors who need a path to manage.php from view.php.
+if (has_capability('mod/scorecard:manage', $context)) {
+    echo $renderer->render_manage_affordance((int)$cm->id);
+}
+
+if (has_capability('mod/scorecard:submit', $context)) {
     $items = scorecard_get_visible_items((int)$scorecard->id);
 
     if (!$items) {
-        // Site admins satisfy :submit and :manage, so they reach this branch
-        // before the manage-only branch below. Pass $canmanage so the renderer
-        // can append an "Add items" affordance for users who can author.
+        // Empty state keeps its directive inline button on top of the persistent
+        // affordance above -- a fresh activity benefits from "Add items and
+        // result bands" as a directive callout, not just the generic "Manage".
         echo $renderer->render_learner_no_items(
             has_capability('mod/scorecard:manage', $context),
             (int)$cm->id

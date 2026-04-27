@@ -255,6 +255,42 @@ class renderer extends plugin_renderer_base {
     }
 
     /**
+     * Render the persistent "Manage scorecard" affordance for view.php.
+     *
+     * view.php's capability-ordered branching routes the submit-cap branch
+     * before the manage-cap branch. Site admins (and editing-teachers who
+     * also satisfy :submit) hit the learner branch and -- without an affordance
+     * here -- have no path back to authoring on the populated form, the result
+     * page, the retake callout, or the empty state. This single helper covers
+     * every learner-facing render path: view.php emits it ONCE above the entire
+     * submit-capable block when the viewer also has :manage, so the affordance
+     * is consistent regardless of which leaf renders below.
+     *
+     * Styled secondary/outline so it does not compete visually with the primary
+     * learner action (Submit button on the form, expand-detail summary on the
+     * result page). The empty-state retains its inline directive button as well
+     * (belt + suspenders for fresh activities; the directive copy "Add items and
+     * result bands" is more actionable when there is literally nothing to score).
+     *
+     * @param int $cmid Course module id; the link target's id parameter.
+     * @return string Rendered HTML.
+     */
+    public function render_manage_affordance(int $cmid): string {
+        $manageurl = new moodle_url('/mod/scorecard/manage.php', [
+            'id' => $cmid,
+            'tab' => 'items',
+        ]);
+        return html_writer::div(
+            html_writer::link(
+                $manageurl,
+                get_string('view:manage_affordance', 'mod_scorecard'),
+                ['class' => 'btn btn-outline-secondary btn-sm']
+            ),
+            'scorecard-manage-affordance mb-3'
+        );
+    }
+
+    /**
      * Render the learner submission form.
      *
      * One fieldset per item (prompt as legend), radio inputs from scalemin to

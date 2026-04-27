@@ -384,6 +384,44 @@ final class learner_render_test extends \advanced_testcase {
     }
 
     /**
+     * render_manage_affordance emits a link to manage.php?id=cmid&tab=items.
+     */
+    public function test_manage_affordance_links_to_manage_items_tab(): void {
+        global $PAGE;
+        $this->resetAfterTest();
+        $PAGE->set_url('/mod/scorecard/view.php');
+        $PAGE->set_context(\context_system::instance());
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+
+        $html = $renderer->render_manage_affordance(99);
+
+        $this->assertStringContainsString('manage.php', $html);
+        $this->assertStringContainsString('id=99', $html);
+        $this->assertStringContainsString('tab=items', $html);
+    }
+
+    /**
+     * render_manage_affordance uses the view:manage_affordance lang string for
+     * the button copy ("Manage scorecard"), distinct from the empty-state
+     * directive copy ("Add items and result bands").
+     */
+    public function test_manage_affordance_uses_persistent_lang_string(): void {
+        global $PAGE;
+        $this->resetAfterTest();
+        $PAGE->set_url('/mod/scorecard/view.php');
+        $PAGE->set_context(\context_system::instance());
+        $renderer = $PAGE->get_renderer('mod_scorecard');
+
+        $html = $renderer->render_manage_affordance(99);
+
+        $this->assertStringContainsString(
+            get_string('view:manage_affordance', 'mod_scorecard'),
+            $html
+        );
+        $this->assertStringNotContainsString('[[', $html);
+    }
+
+    /**
      * Phase 3 lang strings introduced in 3.1 resolve cleanly.
      */
     public function test_phase3_lang_strings_resolve(): void {
