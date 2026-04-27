@@ -98,6 +98,23 @@ $renderer = $PAGE->get_renderer('mod_scorecard');
 if (empty($attempts)) {
     echo $renderer->render_report_empty_state($groupfilteractive);
 } else {
+    // Action row above the table -- export button (Phase 4.4) and any future
+    // post-table actions (e.g. followup #13 manager preview link). Hidden in
+    // both empty branches per Phase 4 kickoff Q5/Q6 dispositions: empty CSV
+    // downloads aren't a real use case. The :export capability check here
+    // means a viewer with :viewreports but not :export sees the table without
+    // the button -- supports the SPEC §9.1 separation between view and export.
+    if (has_capability('mod/scorecard:export', $context)) {
+        $exporturl = new moodle_url('/mod/scorecard/export.php', ['id' => $cm->id]);
+        echo html_writer::div(
+            html_writer::link(
+                $exporturl,
+                get_string('report:export:button', 'mod_scorecard'),
+                ['class' => 'btn btn-secondary btn-sm']
+            ),
+            'scorecard-report-actions mb-3'
+        );
+    }
     echo $renderer->render_report_table($scorecard, $attempts, $identityfields, $responsesbyattempt);
 }
 

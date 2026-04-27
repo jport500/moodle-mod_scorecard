@@ -789,6 +789,175 @@ function scorecard_get_attempt_responses(array $attemptids): array {
 }
 
 /**
+ * Derive the ordered item set for the report's CSV export from the responses batch.
+ *
+ * Phase 4.4 helper. Reuses the data structure returned by
+ * scorecard_get_attempt_responses() (which already LEFT-JOINs scorecard_items)
+ * rather than issuing a second SQL query. No item appears in the export's
+ * column set unless at least one in-view attempt has a response for it -- this
+ * matches the Phase 4 kickoff Q3 disposition: deleted items with zero
+ * responses-in-view don't add empty-column noise.
+ *
+ * Ordering: live items first (deleted = 0) by sortorder ASC, then deleted items
+ * (deleted = 1) by sortorder ASC at the end. Deterministic so test assertions
+ * can pin specific column positions and operators reading the CSV in a
+ * spreadsheet see a stable column order.
+ *
+ * Header text for deleted items: the LEFT JOIN preserves the live prompt
+ * because soft-delete keeps the item row (deleted = 1, prompt unchanged). So
+ * "latest snapshot" of a deleted item's prompt IS just its current prompt --
+ * no separate snapshot lookup required. The "[deleted] " prefix is applied at
+ * header-build time in scorecard_build_export_data, not here.
+ *
+ * @param array<int, array<int, \stdClass>> $responsesbyattempt Output of
+ *        scorecard_get_attempt_responses() -- map of attemptid to response rows.
+ * @return array<int, \stdClass> Ordered item rows. Each carries id, prompt,
+ *         promptformat, deleted, sortorder. Empty array when no responses.
+ */
+function scorecard_get_export_item_set(array $responsesbyattempt): array {
+    $itemsbyid = [];
+    foreach ($responsesbyattempt as $rows) {
+        foreach ($rows as $row) {
+            $itemid = (int)$row->itemid;
+            if ($itemid <= 0) {
+                continue;
+            }
+            if (!isset($itemsbyid[$itemid])) {
+                $itemsbyid[$itemid] = (object)[
+                    'id' => $itemid,
+                    'prompt' => (string)($row->prompt ?? ''),
+                    'promptformat' => (int)($row->promptformat ?? FORMAT_HTML),
+                    'deleted' => !empty($row->deleted) ? 1 : 0,
+                    'sortorder' => $row->sortorder !== null ? (int)$row->sortorder : PHP_INT_MAX,
+                ];
+            }
+        }
+    }
+
+    $items = array_values($itemsbyid);
+    usort($items, function (\stdClass $a, \stdClass $b): int {
+        if ($a->deleted !== $b->deleted) {
+            return $a->deleted - $b->deleted;
+        }
+        return $a->sortorder - $b->sortorder;
+    });
+
+    return $items;
+}
+
+/**
+ * Build the CSV export's headers + rows from the report data fetched by report.php.
+ *
+ * Phase 4.4 helper. Returns a plain array structure rather than streaming so
+ * PHPUnit can assert the data shape without capturing output buffers --
+ * standard Moodle pattern (mod_quiz, mod_feedback). The caller (export.php)
+ * walks the structure and feeds each row to csv_export_writer for streaming.
+ *
+ * Headers (in order): fullname, userid, username, then the per-policy identity
+ * fields (each via \core_user\fields::get_display_name), then attemptnumber,
+ * submitted, totalscore, maxscore, percentage, band, then one column per item
+ * in the item set. Live item headers use format_string on the current prompt;
+ * deleted item headers prepend "[deleted] " to that current prompt. Per Phase
+ * 4 kickoff Q7c disposition, the "latest snapshot" framing collapses to "the
+ * current prompt" because soft-delete preserves the row.
+ *
+ * Rows: one per attempt, in the order $attempts was passed (typically userid
+ * ASC, attemptnumber ASC from scorecard_get_attempts). Cell values follow the
+ * header column order. Per-item cells contain the responsevalue or blank
+ * string '' when the attempt has no response row for that item -- per kickoff
+ * Q7d disposition (audit-honest blank for items added after the attempt was
+ * submitted, etc.).
+ *
+ * Submitted timestamp: rendered via userdate() so the CSV reads sensibly in
+ * the operator's timezone. Trade-off: not a machine-parsable ISO 8601 timestamp.
+ * Possible v1.x enhancement (followup #22 if it surfaces) to add a parallel
+ * "submitted_iso" column. Keeping MVP simple.
+ *
+ * @param \stdClass $scorecard Scorecard config row (scalemin / scalemax read
+ *                             for the response-cell numeric range; band
+ *                             snapshot fields read from each attempt row).
+ * @param array<int, \stdClass> $attempts Attempt rows from
+ *                                        scorecard_get_attempts(); already
+ *                                        joined to user identity fields.
+ * @param array<int, array<int, \stdClass>> $responsesbyattempt Map of attemptid
+ *                                                              to response rows.
+ * @param array<int, \stdClass> $itemset Output of scorecard_get_export_item_set;
+ *                                       defines the per-item column order.
+ * @param string[] $identityfields Per-policy identity field names from
+ *                                 \core_user\fields::get_identity_fields().
+ * @return array{headers: string[], rows: array<int, array<int, string>>}
+ */
+function scorecard_build_export_data(
+    \stdClass $scorecard,
+    array $attempts,
+    array $responsesbyattempt,
+    array $itemset,
+    array $identityfields
+): array {
+    $headers = [
+        get_string('report:col:fullname', 'mod_scorecard'),
+        get_string('report:col:userid', 'mod_scorecard'),
+        get_string('report:col:username', 'mod_scorecard'),
+    ];
+    foreach ($identityfields as $field) {
+        $headers[] = \core_user\fields::get_display_name($field);
+    }
+    $headers[] = get_string('report:col:attemptnumber', 'mod_scorecard');
+    $headers[] = get_string('report:col:submitted', 'mod_scorecard');
+    $headers[] = get_string('report:col:totalscore', 'mod_scorecard');
+    $headers[] = get_string('report:col:maxscore', 'mod_scorecard');
+    $headers[] = get_string('report:col:percentage', 'mod_scorecard');
+    $headers[] = get_string('report:col:band', 'mod_scorecard');
+
+    $deletedprefix = get_string('report:detail:deletedprefix', 'mod_scorecard');
+    foreach ($itemset as $item) {
+        $promptlabel = format_string((string)$item->prompt);
+        if (!empty($item->deleted)) {
+            $promptlabel = $deletedprefix . $promptlabel;
+        }
+        $headers[] = $promptlabel;
+    }
+
+    $rows = [];
+    foreach ($attempts as $attempt) {
+        // Build per-attempt response lookup keyed by itemid for O(1) cell access.
+        $responsebyitem = [];
+        $attemptid = (int)$attempt->attemptid;
+        foreach ($responsesbyattempt[$attemptid] ?? [] as $r) {
+            $responsebyitem[(int)$r->itemid] = (int)$r->responsevalue;
+        }
+
+        $row = [
+            fullname($attempt),
+            (string)(int)$attempt->userid,
+            (string)($attempt->username ?? ''),
+        ];
+        foreach ($identityfields as $field) {
+            $row[] = (string)($attempt->{$field} ?? '');
+        }
+        $row[] = (string)(int)$attempt->attemptnumber;
+        $row[] = userdate((int)$attempt->timecreated);
+        $row[] = (string)(int)$attempt->totalscore;
+        $row[] = (string)(int)$attempt->maxscore;
+        $row[] = (string)(int)round((float)$attempt->percentage);
+        $row[] = !empty($attempt->bandlabelsnapshot)
+            ? (string)$attempt->bandlabelsnapshot
+            : get_string('report:col:noband', 'mod_scorecard');
+
+        foreach ($itemset as $item) {
+            $itemid = (int)$item->id;
+            $row[] = array_key_exists($itemid, $responsebyitem)
+                ? (string)$responsebyitem[$itemid]
+                : '';
+        }
+
+        $rows[] = $row;
+    }
+
+    return ['headers' => $headers, 'rows' => $rows];
+}
+
+/**
  * Validate, score, and persist a learner submission inside a single transaction.
  *
  * The HTTP entry point at /mod/scorecard/submit.php owns the auth boundary
