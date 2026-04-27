@@ -403,12 +403,20 @@ Table names use Moodle conventions with prefix `{scorecard...}`. Exact XMLDB def
 
 | **Capability**            | **Default Roles**                      | **Purpose**               |
 |---------------------------|----------------------------------------|---------------------------|
-| mod/scorecard:addinstance | manager, coursecreator, editingteacher | Create activity instance. |
-| mod/scorecard:view        | student, teacher, manager              | View activity.            |
+| mod/scorecard:addinstance | manager, editingteacher                | Create activity instance. |
+| mod/scorecard:view        | student, teacher, editingteacher, manager | View activity.         |
 | mod/scorecard:submit      | student                                | Submit response.          |
 | mod/scorecard:manage      | editingteacher, manager                | Manage items and bands.   |
 | mod/scorecard:viewreports | teacher, editingteacher, manager       | View reports.             |
 | mod/scorecard:export      | teacher, editingteacher, manager       | Export CSV.               |
+
+> **Decision (v0.4.1):** Two corrections to this table reflecting Moodle role-capability mechanics rather than natural-English assumptions:
+>
+> 1. The `:view` row originally listed `teacher` only, intending the natural-English meaning ("anyone teacherly"). Moodle's archetype taxonomy uses `teacher` for the *non-editing* teacher role only; the default "Teacher" role uses the `editingteacher` archetype. Without `editingteacher` on `:view`, the default Teacher role could not see the activity card in the course outline despite holding `:manage`, `:viewreports`, and `:export` — a circular state where the role had every authoring capability except the foundational one. Corrected the row to include `editingteacher`.
+>
+> 2. The `:addinstance` row originally listed `coursecreator` alongside `manager` and `editingteacher`. Moodle's `clonepermissionsfrom` pattern (used for activity-module `:addinstance` caps; canonical in mod_quiz, mod_assign, mod_forum) drives actual propagation from `moodle/course:manageactivities`, which the `coursecreator` role does not hold by default. The archetypes list is documentation-only when `clonepermissionsfrom` is set. Coursecreator was therefore never actually granted `:addinstance` in any deployment. Removed from the row to match reality and canonical convention.
+>
+> Both corrections match the pattern every other authoring capability in this table already follows.
 
 ## 9.2 Gradebook
 

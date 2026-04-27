@@ -1,5 +1,79 @@
 # mod_scorecard release notes
 
+## v0.3.0 hotfix (version stamp 2026042602, 2026-04-26)
+
+**MATURITY_ALPHA. Capability fixes; no release tag bump.** Two SPEC §9.1
+corrections of the same shape: natural-English assumptions versus
+Moodle's actual role-capability mechanics. Surfaced during Phase 4.1
+walkthrough when a user enrolled as the default "Teacher" role could
+not see the activity card in their course. The `editingteacher`-on-`:view`
+fix was the motivating bug; running the new regression test caught a
+second mismatch on `:addinstance` as a side effect of being structurally
+complete (coursecreator was listed but never actually got the cap due
+to Moodle's `clonepermissionsfrom` propagation pattern). Both corrected
+together; the new behavior-level regression test pins the full SPEC §9.1
+capability matrix so further mismatches of this shape can't recur silently.
+
+### Operator action required
+
+Existing deployments running version stamp 2026042601 or earlier need
+to run `php admin/cli/upgrade.php` (or trigger the admin UI upgrade
+prompt). The plugin ships an explicit upgrade step that restores the
+missing `:view` cap to every editingteacher-archetype role at the
+system context — Moodle's `update_capabilities()` does NOT
+re-propagate archetype rows to existing capabilities (it preserves
+admin customizations on upgrade), so the upgrade step is what actually
+performs the restoration. No manual role-cap editing is required. The
+upgrade step is idempotent and skips any role with an existing explicit
+override (preserving deliberate `CAP_PREVENT` settings or similar).
+After upgrade, the default "Teacher" role gains visibility on existing
+scorecard activities without further configuration.
+
+The `:addinstance` correction is purely a code-cleanliness change — the
+dead-code `coursecreator` archetype entry was never actually granting
+the cap (`clonepermissionsfrom => moodle/course:manageactivities`
+dominated), so its removal does not change any deployment's runtime
+behavior and needs no upgrade step.
+
+### Changed
+
+- `docs/SPEC.md` §9.1: two table cells corrected. `:view` row gains
+  `editingteacher`. `:addinstance` row drops `coursecreator`, leaving
+  `manager, editingteacher` (matches the canonical core-plugin pattern
+  in mod_quiz / mod_assign / mod_forum). Inline
+  `**Decision (v0.4.1):**` callout below the table covers both
+  corrections in a single rationale frame. SPEC patch version v0.4 →
+  v0.4.1.
+- `db/access.php`: `'editingteacher' => CAP_ALLOW` added to
+  `mod/scorecard:view`'s archetypes; `'coursecreator' => CAP_ALLOW`
+  removed from `mod/scorecard:addinstance`'s archetypes (the
+  `clonepermissionsfrom => 'moodle/course:manageactivities'` directive
+  remains and continues to drive actual propagation).
+- `version.php`: 2026042601 → 2026042602. Triggers
+  `xmldb_scorecard_upgrade()` to run the cap-restoration savepoint.
+- `db/upgrade.php` (new): explicit upgrade step at savepoint 2026042602
+  iterates every editingteacher-archetype role and idempotently assigns
+  `mod/scorecard:view = CAP_ALLOW` at system context. Includes an
+  architectural-knowledge docblock so future maintainers know why the
+  step exists separately from access.php (see "Operator action required"
+  above for the rationale).
+- `tests/access_test.php` (new): three behavior-level regression tests.
+  (a) `test_spec_section_9_1_role_capabilities_match` iterates every
+  (capability, role) pair in SPEC §9.1 — covers fresh-install
+  propagation. (b) `test_upgrade_step_restores_editingteacher_view_cap`
+  simulates the broken pre-fix state and asserts the upgrade step
+  restores the cap — covers the upgrade-from-broken-baseline path.
+  (c) `test_upgrade_step_preserves_existing_cap_row` asserts the
+  upgrade step is idempotent and does not clobber explicit admin
+  overrides.
+
+### Quality gates
+
+- phpcs zero/zero on changed files.
+- PHPUnit: full plugin suite green; access_test.php contributes 3 tests
+  covering both the fresh-install and the upgrade-from-broken-baseline
+  deployment paths.
+
 ## v0.3.0 — Phase 3 learner submission (2026-04-26)
 
 **MATURITY_ALPHA. Learner-facing experience is now usable end-to-end;
