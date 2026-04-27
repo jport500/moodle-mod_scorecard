@@ -47,8 +47,9 @@ $scorecard = $DB->get_record('scorecard', ['id' => $cm->instance], '*', MUST_EXI
 require_login($course, true, $cm);
 $context = context_module::instance($cm->id);
 
-// Capability gate BEFORE data fetch (Phase 4.1 pre-flag #3). Group-mode-aware
-// accessallgroups checks land in 4.3 alongside the group selector.
+// Capability gate BEFORE data fetch (Phase 4.1 pre-flag #3). Phase 4.3
+// added the group filter; moodle/site:accessallgroups handling is delegated
+// to groups_get_activity_group() below per Phase 4.3 pre-flag #2.
 if (!has_capability('mod/scorecard:viewreports', $context)) {
     redirect(
         new moodle_url('/mod/scorecard/view.php', ['id' => $cm->id]),
@@ -64,9 +65,16 @@ $PAGE->set_title(format_string($scorecard->name) . ': ' . get_string('report:hea
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_context($context);
 
-// 4.1 group filter: hard-coded null. 4.3 replaces this with
-// groups_get_activity_group($cm, true) and the page-level group selector.
-$groupid = null;
+// Phase 4.3 group filter. groups_get_activity_group($cm, true) reads/persists
+// the active group via session AND consults moodle/site:accessallgroups
+// internally -- users without the cap see only their own groups in the
+// selector. Returns 0 ("All groups" sentinel) when no group is selected,
+// or false when the activity has no group mode configured. We treat both
+// 0 and false as "no filter," and only the truthy >0 value triggers the
+// SQL JOIN inside scorecard_get_attempts.
+$activegroup = groups_get_activity_group($cm, true);
+$groupid = ($activegroup && $activegroup > 0) ? (int)$activegroup : null;
+$groupfilteractive = ($groupid !== null);
 
 $attempts = scorecard_get_attempts($context, (int)$scorecard->id, $groupid);
 $identityfields = \core_user\fields::get_identity_fields($context, true);
@@ -80,9 +88,15 @@ $responsesbyattempt = $attempts
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('report:heading', 'mod_scorecard'));
 
+// Group selector emitted unconditionally above the table/empty branch.
+// groups_print_activity_menu returns the empty string when the activity has
+// no group mode configured, so this is a no-op in that case (Phase 4.3 Q1
+// disposition: standard Moodle position, present consistently).
+echo groups_print_activity_menu($cm, $pageurl, true);
+
 $renderer = $PAGE->get_renderer('mod_scorecard');
 if (empty($attempts)) {
-    echo $renderer->render_report_empty_state();
+    echo $renderer->render_report_empty_state($groupfilteractive);
 } else {
     echo $renderer->render_report_table($scorecard, $attempts, $identityfields, $responsesbyattempt);
 }

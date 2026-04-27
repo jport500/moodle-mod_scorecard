@@ -132,6 +132,7 @@ $string['report:detail:outofrange'] = ' (out of range: expected {$a->min}–{$a-
 $string['report:detail:response'] = 'Response: {$a->value} of {$a->scalemax}';
 $string['report:detail:summary'] = 'View {$a} responses';
 $string['report:empty'] = 'No attempts have been submitted yet.';
+$string['report:empty:filtered'] = 'No attempts in the selected group.';
 $string['report:heading'] = 'Reports';
 $string['report:nocapability'] = 'You do not have permission to view reports for this scorecard.';
 $string['report:percentageformat'] = '{$a}%';

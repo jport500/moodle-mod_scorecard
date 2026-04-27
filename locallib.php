@@ -650,9 +650,18 @@ function scorecard_compute_attempt_data(
  * attempts per user appear together, sorted by attempt number ascending. Sortable
  * column controls are out of scope for MVP -- this is the default and only sort.
  *
- * Group filter: $groupid is accepted as a contract for Phase 4.3 wiring but is a
- * no-op in 4.1. The signature is locked now to avoid churn at the report.php call
- * site when 4.3 plugs in groups_get_activity_group() integration.
+ * Group filter (Phase 4.3): when $groupid is null or 0, no group filter is
+ * applied (returns all attempts on the scorecard). When $groupid > 0, an
+ * additional JOIN against {groups_members} restricts the result set to
+ * attempts by users who are members of that group at query time. Group
+ * membership is read live -- if a learner moves between groups after
+ * submitting, the attempt's filter membership shifts accordingly. This
+ * matches Moodle convention (membership is current-state, not historical).
+ *
+ * The optional JOIN is constructed via PHP string concatenation rather than
+ * a LEFT JOIN with OR-condition trickery in the WHERE clause: cleaner SQL,
+ * simpler query plans, the :groupid parameter is bound only when actually
+ * filtering. Standard Moodle pattern.
  *
  * Snapshot-only reads: the helper does NOT join {scorecard_bands}. Reports display
  * the attempt's bandlabelsnapshot column, not the live band -- SPEC §11.2 carries
@@ -661,10 +670,14 @@ function scorecard_compute_attempt_data(
  * @param \context $context Module context, used by for_identity() to honour the
  *                          per-context identity policy.
  * @param int $scorecardid
- * @param int|null $groupid Phase 4.3 wires this through; 4.1 ignores it.
+ * @param int|null $groupid null or 0 returns all attempts; >0 filters to members
+ *                          of the specified group. Caller (report.php) typically
+ *                          passes the value from groups_get_activity_group($cm, true),
+ *                          which handles the moodle/site:accessallgroups capability
+ *                          check internally.
  * @return array<int, \stdClass> Attempt rows with user fields joined, ordered by
  *                               userid ASC, attemptnumber ASC. Returns empty
- *                               array when no attempts exist.
+ *                               array when no attempts match the filter.
  */
 function scorecard_get_attempts(\context $context, int $scorecardid, ?int $groupid = null): array {
     global $DB;
@@ -675,6 +688,13 @@ function scorecard_get_attempts(\context $context, int $scorecardid, ?int $group
     // without a second query.
     $userfieldsapi = \core_user\fields::for_identity($context, true)->with_name();
     $userfields = $userfieldsapi->get_sql('u', true);
+
+    $params = ['scorecardid' => $scorecardid] + $userfields->params;
+    $groupjoin = '';
+    if ($groupid !== null && $groupid > 0) {
+        $groupjoin = 'JOIN {groups_members} gm ON gm.userid = a.userid AND gm.groupid = :groupid';
+        $params['groupid'] = (int)$groupid;
+    }
 
     $sql = "SELECT a.id AS attemptid,
                    a.scorecardid,
@@ -694,10 +714,9 @@ function scorecard_get_attempts(\context $context, int $scorecardid, ?int $group
             FROM {scorecard_attempts} a
             JOIN {user} u ON u.id = a.userid
             {$userfields->joins}
+            {$groupjoin}
            WHERE a.scorecardid = :scorecardid
         ORDER BY a.userid ASC, a.attemptnumber ASC, a.id ASC";
-
-    $params = ['scorecardid' => $scorecardid] + $userfields->params;
 
     return array_values($DB->get_records_sql($sql, $params));
 }

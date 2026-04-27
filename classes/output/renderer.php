@@ -836,11 +836,23 @@ class renderer extends plugin_renderer_base {
      * Distinct from the manage screen's items / bands empty states because the
      * call to action here is "wait for learners," not "add more authoring."
      *
+     * Phase 4.3 added the $filtered flag for the group-filter empty case: when
+     * the operator selects a specific group and that group has no attempts, the
+     * generic "no attempts yet" copy reads slightly wrong (the scorecard may
+     * have plenty of attempts, just none in that group). The selector above
+     * the notice already shows the active group name, so the filtered copy
+     * stays generic ("No attempts in the selected group.") rather than
+     * duplicating the group name in the message body.
+     *
+     * @param bool $filtered True when a group filter is active and produced an
+     *                       empty result. Default false preserves the pre-4.3
+     *                       single-arg call shape.
      * @return string Rendered HTML notice.
      */
-    public function render_report_empty_state(): string {
+    public function render_report_empty_state(bool $filtered = false): string {
+        $key = $filtered ? 'report:empty:filtered' : 'report:empty';
         return html_writer::div(
-            get_string('report:empty', 'mod_scorecard'),
+            get_string($key, 'mod_scorecard'),
             'scorecard-report-empty alert alert-info'
         );
     }

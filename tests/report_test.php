@@ -202,11 +202,12 @@ final class report_test extends \advanced_testcase {
     }
 
     /**
-     * 4.1 group-filter contract: $groupid is accepted but is a no-op. Passing
-     * null OR an arbitrary int should return the same set as omitting the param.
-     * 4.3 will add the actual filter behavior; this test pins the 4.1 contract.
+     * 4.3 group-filter "no filter" contract: $groupid null and $groupid 0 both
+     * return the full attempt set. groups_get_activity_group() returns 0 as the
+     * "All groups" sentinel; null is the default-no-filter shape from callers
+     * outside the standard groups workflow. Both must short-circuit the JOIN.
      */
-    public function test_group_filter_null_returns_all(): void {
+    public function test_group_filter_null_and_zero_return_all(): void {
         $this->resetAfterTest();
         [$scorecard, , $context] = $this->create_scorecard();
         $user = $this->getDataGenerator()->create_user();
@@ -215,11 +216,11 @@ final class report_test extends \advanced_testcase {
 
         $defaultrows = scorecard_get_attempts($context, (int)$scorecard->id);
         $nullrows = scorecard_get_attempts($context, (int)$scorecard->id, null);
-        $arbitraryrows = scorecard_get_attempts($context, (int)$scorecard->id, 999);
+        $zerorows = scorecard_get_attempts($context, (int)$scorecard->id, 0);
 
         $this->assertCount(2, $defaultrows);
         $this->assertSame(count($defaultrows), count($nullrows));
-        $this->assertSame(count($defaultrows), count($arbitraryrows));
+        $this->assertSame(count($defaultrows), count($zerorows));
     }
 
     /**
@@ -646,5 +647,157 @@ final class report_test extends \advanced_testcase {
         $this->assertStringContainsString('<details', $html);
         $this->assertStringContainsString('Wired end-to-end', $html);
         $this->assertStringContainsString('Response: 8 of 10', $html);
+    }
+
+    /**
+     * Phase 4.3 helper: enrol a user in a course and add them to a specific
+     * group. Group membership requires both an enrolment AND a group_member
+     * row -- groups_members alone is insufficient if the user isn't enrolled.
+     */
+    private function enrol_into_group(\stdClass $course, \stdClass $user, int $groupid): void {
+        $this->getDataGenerator()->enrol_user($user->id, $course->id);
+        $this->getDataGenerator()->create_group_member([
+            'groupid' => $groupid,
+            'userid' => $user->id,
+        ]);
+    }
+
+    /**
+     * Group filter activates: passing $groupid > 0 restricts the result to
+     * users who are members of that group at query time. Members of OTHER
+     * groups are excluded.
+     */
+    public function test_group_filter_returns_only_member_attempts(): void {
+        $this->resetAfterTest();
+        [$scorecard, , $context] = $this->create_scorecard();
+        // Course id is on the scorecard row -- recover it for group fixtures.
+        $course = (object)['id' => (int)$scorecard->course];
+
+        $groupa = $this->getDataGenerator()->create_group(['courseid' => $course->id, 'name' => 'A']);
+        $groupb = $this->getDataGenerator()->create_group(['courseid' => $course->id, 'name' => 'B']);
+
+        $usera = $this->getDataGenerator()->create_user();
+        $userb = $this->getDataGenerator()->create_user();
+        $this->enrol_into_group($course, $usera, (int)$groupa->id);
+        $this->enrol_into_group($course, $userb, (int)$groupb->id);
+
+        $this->insert_attempt((int)$scorecard->id, (int)$usera->id, 1, 18, 30, 60.0, 'Strong');
+        $this->insert_attempt((int)$scorecard->id, (int)$userb->id, 1, 12, 30, 40.0, 'Mid');
+
+        $rowsfora = scorecard_get_attempts($context, (int)$scorecard->id, (int)$groupa->id);
+        $rowsforb = scorecard_get_attempts($context, (int)$scorecard->id, (int)$groupb->id);
+
+        $this->assertCount(1, $rowsfora);
+        $this->assertSame((int)$usera->id, (int)$rowsfora[0]->userid);
+        $this->assertCount(1, $rowsforb);
+        $this->assertSame((int)$userb->id, (int)$rowsforb[0]->userid);
+    }
+
+    /**
+     * Cross-group isolation: filtering by one group never leaks attempts from
+     * another. Three users across three groups, three attempts, three filter
+     * passes; each pass returns exactly its own one.
+     */
+    public function test_group_filter_cross_group_isolation(): void {
+        $this->resetAfterTest();
+        [$scorecard, , $context] = $this->create_scorecard();
+        $course = (object)['id' => (int)$scorecard->course];
+
+        $groups = [];
+        $users = [];
+        for ($i = 1; $i <= 3; $i++) {
+            $groups[$i] = $this->getDataGenerator()->create_group([
+                'courseid' => $course->id,
+                'name' => "Group {$i}",
+            ]);
+            $users[$i] = $this->getDataGenerator()->create_user();
+            $this->enrol_into_group($course, $users[$i], (int)$groups[$i]->id);
+            $this->insert_attempt(
+                (int)$scorecard->id,
+                (int)$users[$i]->id,
+                1,
+                10 + $i,
+                30,
+                (10.0 + $i) * 100 / 30,
+                null
+            );
+        }
+
+        for ($i = 1; $i <= 3; $i++) {
+            $rows = scorecard_get_attempts($context, (int)$scorecard->id, (int)$groups[$i]->id);
+            $this->assertCount(1, $rows, "Group {$i} should see exactly one attempt");
+            $this->assertSame((int)$users[$i]->id, (int)$rows[0]->userid);
+        }
+    }
+
+    /**
+     * A user in multiple groups appears under either group's filter. Group
+     * membership is multi-valued; the JOIN matches any membership row, and
+     * the helper de-duplicates because each user has at most one attempt
+     * per (scorecard, attemptnumber) -- the {groups_members} JOIN does not
+     * multiply rows in this fixture.
+     */
+    public function test_group_filter_user_in_multiple_groups(): void {
+        $this->resetAfterTest();
+        [$scorecard, , $context] = $this->create_scorecard();
+        $course = (object)['id' => (int)$scorecard->course];
+
+        $groupa = $this->getDataGenerator()->create_group(['courseid' => $course->id, 'name' => 'A']);
+        $groupb = $this->getDataGenerator()->create_group(['courseid' => $course->id, 'name' => 'B']);
+
+        $user = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($user->id, $course->id);
+        $this->getDataGenerator()->create_group_member(['groupid' => (int)$groupa->id, 'userid' => $user->id]);
+        $this->getDataGenerator()->create_group_member(['groupid' => (int)$groupb->id, 'userid' => $user->id]);
+
+        $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 18, 30, 60.0, 'Strong');
+
+        $rowsfora = scorecard_get_attempts($context, (int)$scorecard->id, (int)$groupa->id);
+        $rowsforb = scorecard_get_attempts($context, (int)$scorecard->id, (int)$groupb->id);
+
+        $this->assertCount(1, $rowsfora);
+        $this->assertCount(1, $rowsforb);
+        $this->assertSame((int)$user->id, (int)$rowsfora[0]->userid);
+        $this->assertSame((int)$user->id, (int)$rowsforb[0]->userid);
+    }
+
+    /**
+     * Filter with a nonexistent group id returns an empty result. Defensive
+     * against stale session group ids surviving across course-edit operations
+     * that delete groups.
+     */
+    public function test_group_filter_nonexistent_group_returns_empty(): void {
+        $this->resetAfterTest();
+        [$scorecard, , $context] = $this->create_scorecard();
+        $user = $this->getDataGenerator()->create_user();
+        $this->insert_attempt((int)$scorecard->id, (int)$user->id, 1, 18, 30, 60.0, 'Strong');
+
+        $rows = scorecard_get_attempts($context, (int)$scorecard->id, 999999);
+
+        $this->assertSame([], $rows);
+    }
+
+    /**
+     * render_report_empty_state with $filtered=true emits the group-filtered
+     * copy ("No attempts in the selected group.") instead of the generic copy.
+     * Phase 4.3 Q2 disposition (b.1) -- generic filtered copy, no group name
+     * duplication since the selector above the notice already shows the name.
+     */
+    public function test_render_empty_state_filtered_uses_filtered_copy(): void {
+        $this->resetAfterTest();
+        $genericcopy = get_string('report:empty', 'mod_scorecard');
+        $filteredcopy = get_string('report:empty:filtered', 'mod_scorecard');
+
+        // Pre-condition: the two strings must actually differ. If a future
+        // language pack accidentally collapses them, this assertion catches it.
+        $this->assertNotSame($genericcopy, $filteredcopy);
+
+        $defaulthtml = $this->renderer()->render_report_empty_state();
+        $filteredhtml = $this->renderer()->render_report_empty_state(true);
+
+        $this->assertStringContainsString($genericcopy, $defaulthtml);
+        $this->assertStringNotContainsString($filteredcopy, $defaulthtml);
+        $this->assertStringContainsString($filteredcopy, $filteredhtml);
+        $this->assertStringNotContainsString($genericcopy, $filteredhtml);
     }
 }
