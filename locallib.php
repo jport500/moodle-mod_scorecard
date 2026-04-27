@@ -177,7 +177,13 @@ function scorecard_add_item(stdClass $data): int {
         $data->sortorder = $max + 1;
     }
 
-    return (int)$DB->insert_record('scorecard_items', $data);
+    $itemid = (int)$DB->insert_record('scorecard_items', $data);
+
+    // Phase 5a.2: recompute grade item if no attempts exist yet (SPEC §9.2
+    // lifecycle gate). No-op when 1+ attempts exist — grademax is frozen.
+    scorecard_recompute_grade_if_no_attempts((int)$data->scorecardid);
+
+    return $itemid;
 }
 
 /**
@@ -195,6 +201,18 @@ function scorecard_update_item(stdClass $data): void {
     $data->timemodified = time();
     unset($data->scorecardid, $data->deleted, $data->sortorder);
     $DB->update_record('scorecard_items', $data);
+
+    // Phase 5a.2: visibility toggle (the only editable field that can
+    // change the visible-item count) recomputes grademax when no
+    // attempts exist. Look up scorecardid from the just-updated item
+    // since the function contract allows callers to pass $data without
+    // scorecardid (or with a phantom one that gets stripped above).
+    $scorecardid = (int)$DB->get_field(
+        'scorecard_items',
+        'scorecardid',
+        ['id' => (int)$data->id]
+    );
+    scorecard_recompute_grade_if_no_attempts($scorecardid);
 }
 
 /**
@@ -214,6 +232,9 @@ function scorecard_delete_item(int $itemid): void {
     $item = $DB->get_record('scorecard_items', ['id' => $itemid], '*', MUST_EXIST);
 
     if (scorecard_count_attempts((int)$item->scorecardid) > 0) {
+        // Soft-delete branch: per SPEC §9.2, grademax does NOT recompute
+        // when attempts exist. The item is marked deleted but the grade
+        // item's grademax stays at its frozen value.
         $DB->set_field('scorecard_items', 'deleted', 1, ['id' => $itemid]);
         $DB->set_field('scorecard_items', 'timemodified', time(), ['id' => $itemid]);
         return;
@@ -221,6 +242,11 @@ function scorecard_delete_item(int $itemid): void {
 
     $DB->delete_records('scorecard_items', ['id' => $itemid]);
     scorecard_renumber_items((int)$item->scorecardid);
+
+    // Phase 5a.2: hard-delete branch only (count_attempts == 0 guaranteed
+    // by the early return above). Recompute grademax to reflect the
+    // smaller visible-item count.
+    scorecard_recompute_grade_if_no_attempts((int)$item->scorecardid);
 }
 
 /**
@@ -1171,4 +1197,43 @@ function scorecard_handle_submission(
 function scorecard_compute_auto_grademax(\stdClass $scorecard): int {
     $items = scorecard_get_visible_items((int)$scorecard->id);
     return count($items) * (int)$scorecard->scalemax;
+}
+
+/**
+ * Recompute the grade item for a scorecard if no attempts exist yet.
+ *
+ * Phase 5a.2 lifecycle gate: per SPEC §9.2, grademax is recalculated on
+ * item add/remove ONLY while no attempts exist. Once the first attempt
+ * persists, grademax freezes at its then-current value to keep historical
+ * scoring stable (SPEC §11.2's snapshot-stability rule applied to grade
+ * items as well as attempt rows).
+ *
+ * Called from scorecard_add_item, scorecard_update_item, and the
+ * hard-delete branch of scorecard_delete_item after they mutate the items
+ * table. No-op when the scorecard has 1+ attempts. The naming makes the
+ * gate condition explicit so future maintainers don't accidentally call
+ * it from contexts that should not be gated (e.g., a v1.x bulk-import
+ * helper that needs to recompute regardless).
+ *
+ * @param int $scorecardid Scorecard activity id whose grade item may need recomputing.
+ */
+function scorecard_recompute_grade_if_no_attempts(int $scorecardid): void {
+    global $DB;
+
+    // Use a direct DB count rather than scorecard_count_attempts here:
+    // count_attempts uses a MODE_REQUEST cache (db/caches.php) that
+    // production mutators invalidate via cache::make()->delete() in
+    // scorecard_handle_submission. This helper is called from item-CRUD
+    // lifecycle hooks where the cache may be stale — and worse, calling
+    // count_attempts here would prime the cache with the pre-mutation
+    // value, breaking subsequent scorecard_count_attempts callers (e.g.
+    // scorecard_delete_item's soft-vs-hard branch) within the same
+    // request. Direct count is one cheap query and side-effect free.
+    $count = $DB->count_records('scorecard_attempts', ['scorecardid' => $scorecardid]);
+    if ($count > 0) {
+        return;
+    }
+
+    $scorecard = $DB->get_record('scorecard', ['id' => $scorecardid], '*', MUST_EXIST);
+    scorecard_update_grades($scorecard);
 }

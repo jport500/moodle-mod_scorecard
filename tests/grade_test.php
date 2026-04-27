@@ -328,4 +328,184 @@ final class grade_test extends \advanced_testcase {
         $this->assertEquals(12, $grades[(int)$user1->id]->rawgrade);
         $this->assertEquals(22, $grades[(int)$user2->id]->rawgrade);
     }
+
+    /**
+     * Adding visible items with no attempts yet recomputes grademax to
+     * reflect the new visible-item count × scalemax (SPEC §9.2 lifecycle
+     * gate). Phase 5a.2 hook in scorecard_add_item.
+     */
+    public function test_add_item_recomputes_grademax_with_zero_attempts(): void {
+        $this->resetAfterTest();
+        $scorecard = $this->make_scorecard([
+            'gradeenabled' => 1,
+            'grade' => 0,
+            'scalemax' => 10,
+        ]);
+
+        scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 1',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        $this->assert_scorecard_grade_item($scorecard, [
+            'gradetype' => GRADE_TYPE_VALUE,
+            'grademax' => 10.0,
+        ]);
+
+        scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 2',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        $this->assert_scorecard_grade_item($scorecard, [
+            'gradetype' => GRADE_TYPE_VALUE,
+            'grademax' => 20.0,
+        ]);
+    }
+
+    /**
+     * Toggling an item's visibility from 1 to 0 with no attempts yet
+     * recomputes grademax (the now-invisible item drops out of the count).
+     * Phase 5a.2 hook in scorecard_update_item.
+     */
+    public function test_update_item_visibility_toggle_recomputes_grademax(): void {
+        $this->resetAfterTest();
+        $scorecard = $this->make_scorecard([
+            'gradeenabled' => 1,
+            'grade' => 0,
+            'scalemax' => 10,
+        ]);
+
+        $itemid1 = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 1',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 2',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        $this->assert_scorecard_grade_item($scorecard, ['grademax' => 20.0]);
+
+        scorecard_update_item((object)[
+            'id' => $itemid1,
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 1',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 0,
+        ]);
+        $this->assert_scorecard_grade_item($scorecard, ['grademax' => 10.0]);
+    }
+
+    /**
+     * Hard-deleting an item with no attempts yet recomputes grademax to
+     * the smaller visible-item count. Phase 5a.2 hook in
+     * scorecard_delete_item's hard-delete branch.
+     */
+    public function test_delete_item_hard_recomputes_grademax(): void {
+        $this->resetAfterTest();
+        $scorecard = $this->make_scorecard([
+            'gradeenabled' => 1,
+            'grade' => 0,
+            'scalemax' => 10,
+        ]);
+
+        $itemid1 = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 1',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 2',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        $this->assert_scorecard_grade_item($scorecard, ['grademax' => 20.0]);
+
+        scorecard_delete_item($itemid1);
+        $this->assert_scorecard_grade_item($scorecard, ['grademax' => 10.0]);
+    }
+
+    /**
+     * Lifecycle gate: adding an item AFTER an attempt exists does NOT
+     * recompute grademax. The grade item's grademax stays frozen at its
+     * pre-attempt value (SPEC §9.2 + §11.2 stability rules applied to
+     * grade items).
+     */
+    public function test_add_item_after_attempt_freezes_grademax(): void {
+        $this->resetAfterTest();
+        $scorecard = $this->make_scorecard([
+            'gradeenabled' => 1,
+            'grade' => 0,
+            'scalemax' => 10,
+        ]);
+
+        scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 1',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 2',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        $this->assert_scorecard_grade_item($scorecard, ['grademax' => 20.0]);
+
+        $user = $this->getDataGenerator()->create_user();
+        $this->add_attempt((int)$scorecard->id, (int)$user->id, 15);
+
+        scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 3',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        $this->assert_scorecard_grade_item($scorecard, ['grademax' => 20.0]);
+    }
+
+    /**
+     * Lifecycle gate on the delete branch: deleting an item AFTER an
+     * attempt exists takes scorecard_delete_item's soft-delete branch,
+     * which does NOT call the recompute helper. Grademax stays frozen.
+     * This pins the structural placement of the recompute hook in the
+     * hard-delete branch only.
+     */
+    public function test_soft_delete_does_not_recompute_grademax(): void {
+        $this->resetAfterTest();
+        $scorecard = $this->make_scorecard([
+            'gradeenabled' => 1,
+            'grade' => 0,
+            'scalemax' => 10,
+        ]);
+
+        $itemid1 = scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 1',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        scorecard_add_item((object)[
+            'scorecardid' => (int)$scorecard->id,
+            'prompt' => 'Item 2',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+        ]);
+        $this->assert_scorecard_grade_item($scorecard, ['grademax' => 20.0]);
+
+        $user = $this->getDataGenerator()->create_user();
+        $this->add_attempt((int)$scorecard->id, (int)$user->id, 15);
+
+        scorecard_delete_item($itemid1);
+        $this->assert_scorecard_grade_item($scorecard, ['grademax' => 20.0]);
+    }
 }
