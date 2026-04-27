@@ -1,5 +1,133 @@
 # mod_scorecard release notes
 
+## v0.4.0 — Phase 4 (Reporting) (2026-04-27)
+
+**MATURITY_ALPHA. Manager-facing reports surface is now usable
+end-to-end; gradebook integration (Phase 5a) and full backup/privacy
+provider (Phase 5b) remain planned.** This release ships the Reports
+tab and CSV export for managers reviewing submitted scorecard
+attempts. Operators on any v0.3.x baseline upgrade automatically via
+`php admin/cli/upgrade.php`.
+
+### Shipped
+
+**Reports tab.** A capability-gated report view at
+`/mod/scorecard/report.php?id=<cmid>` for users with
+`mod/scorecard:viewreports`. Open from the Reports tab on manage.php
+(which redirects to the report page) or directly via URL. Non-managers
+landing on the URL are redirected to the activity view with a clear
+error notice.
+
+**Attempts table.** Columns: name, identity fields (per site config),
+attempt number, submitted timestamp, total score, max score,
+percentage, band label. Each row carries an expandable `<details>`
+summary block surfacing per-item response detail. Soft-deleted items
+render with a `[deleted]` prefix; out-of-range responses (only
+possible via direct DB tampering or backup/restore mismatch since
+SPEC §4.5 blocks scale changes after attempts exist) flag with a red
+audit suffix.
+
+**Group filter integration.** Standard Moodle group selector above
+the table. `moodle/site:accessallgroups` honored — users without it
+see only their own groups. Filter persists across pagination;
+selector change resets to page 1. Empty-state copy adapts to the
+filter ("No attempts in the selected group." vs the generic "No
+attempts have been submitted yet.").
+
+**CSV export.** Capability-gated to `mod/scorecard:export`, separate
+from `:viewreports` per SPEC §9.1 to support audit roles that need
+on-screen viewing without download. Filter-aware (group selection
+narrows the export). Filename format
+`scorecard-{shortname}-attempts-{YYYYMMDD-HHMMSS}.csv`. Button hidden
+when no attempts match the active filter; direct URL access to
+`export.php` with no attempts redirects to the report page with a
+notification.
+
+**Pagination.** Default page size 25 attempts via flexible_table
+subclass. Pagination chrome (page links, "Previous"/"Next") above
+and below the table when total attempts exceed page size.
+Per-pagination-page response fetch — bandwidth scales with page
+size, not total attempts. Initials filter (A-Z) intentionally
+disabled.
+
+**Layout fix.** Scorecard top-level pages now use the standard
+Moodle centered-column layout, matching mod_quiz and other core
+activities. Affects view, report, manage, and submit pages. The
+omission entered at Phase 1 (view.php) and propagated through
+subsequent phases; surfaced via side-by-side viewport comparison
+with mod_quiz at Phase 4 close.
+
+### Pre-Phase-4 fix-forwards (now formally tagged)
+
+Three fix-forwards landed after v0.3.0 was tagged but before Phase 4
+began. They ship as part of v0.4.0:
+
+- **SPEC §9.1 capability matrix correction.** The `editingteacher`
+  archetype was missing from `:view`; default Moodle "Teacher" role
+  could not see scorecard activity cards in their courses.
+  `coursecreator` was dropped from `:addinstance` (was dead-code; the
+  `clonepermissionsfrom => moodle/course:manageactivities` directive
+  dominated propagation). `db/upgrade.php` savepoint at `2026042602`
+  propagates the missing `:view` cap to existing
+  editingteacher-archetype roles at the system context. Three
+  behavior-level regression tests pin the SPEC §9.1 matrix going
+  forward.
+- **Empty-state shows "Add items" link for managers** when no items
+  are configured. Previously only the learner-facing copy rendered,
+  leaving managers with no on-screen path to authoring from view.php.
+- **Persistent "Manage scorecard" affordance on learner-facing view**
+  for users with `mod/scorecard:manage`. Covers both the
+  `:submit`-and-`:manage` and `:manage`-only branches so authors
+  always have a path to manage.php from view.php.
+
+### Operator action
+
+**Cap-restoration upgrade.** Existing deployments at version stamp
+`2026042601` (the v0.3.0 release tag) need to run
+`php admin/cli/upgrade.php` (or trigger the admin UI upgrade prompt)
+to apply the savepoint at `2026042602` that restores the `:view`
+capability to every editingteacher-archetype role at the system
+context. The upgrade step is idempotent on re-run and preserves
+explicit admin overrides (deliberate `CAP_PREVENT` settings or
+similar). After upgrade, the default "Teacher" role gains visibility
+on existing scorecard activities without further configuration.
+
+**Hotfix tag consolidation.** The v0.3.0 hotfix (numeric
+`2026042602`, fix-forward commits `946d09b` / `f3e2928` / `3d6e5f9`)
+never received its own release tag — the fix landed mid-Phase-4 with
+the release string still set to `v0.3.0`. v0.4.0 formally ships that
+hotfix bundled with the Phase 4 reporting surface.
+
+**No manual configuration required.** After upgrade, the new Reports
+tab appears on manage.php for users with `:viewreports`; the Export
+CSV button appears on report.php for users with `:export`.
+
+### Quality gates
+
+- `phpcs --standard=moodle` clean plugin-wide (0 errors / 0 warnings).
+- 127 PHPUnit tests / 559 assertions across the plugin suite.
+- Manual UI walkthrough at every phase gate (4.1 through 4.6 plus the
+  4.6.5 layout fix-forward) covering paths PHPUnit cannot easily
+  exercise: capability branches, group filter UX, pagination chrome
+  at scale (50-attempt fixture), CSV download integrity, layout
+  consistency against mod_quiz reference.
+
+### Spec status
+
+`docs/SPEC.md` remains v0.4 (sha256-verified against canonical raw
+URL at commit, unchanged through Phase 4 plus the 4.6.5 fix-forward).
+Phase 4 surfaced no spec corrections; SPEC §10.4 (the report-page
+section) was substantially complete and required no revisions during
+build.
+
+### Followups carried forward
+
+All v0.3.0 followups still apply (Phase 5b prerequisites, soft-delete
+restore, out-of-theoretical-range bands, doc cleanup). Closed during
+Phase 4: followup #19 (empty-state copy normalization), closed as
+intentional voice differentiation between learner and manager copy.
+**18 active items** going into Phase 5.
+
 ## v0.3.0 hotfix (version stamp 2026042602, 2026-04-26)
 
 **MATURITY_ALPHA. Capability fixes; no release tag bump.** Two SPEC §9.1

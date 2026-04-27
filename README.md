@@ -12,21 +12,20 @@ total score plus interpretation.
 
 ## Status
 
-**v0.3.0 — Phase 3 (Learner submission) shipped 2026-04-26.** Learners
-can now complete a scorecard end-to-end: submission form with
-validation, scoring engine with band matching and snapshotting,
-result page reading only snapshotted fields, and retake handling
-with a previous-attempt callout. The plugin remains MATURITY_ALPHA —
-gradebook integration and reports land in Phases 5a and 4
-respectively, so operators relying on grade flow or attempt-list
-exports should wait for those releases.
+**v0.4.0 — Phase 4 (Reporting) shipped 2026-04-27.** Managers can now
+review submitted attempts in a paginated report with per-attempt
+expandable detail, group filter integration, and CSV export. Phases
+1–3 (skeleton, authoring, learner submission) shipped previously;
+the plugin remains MATURITY_ALPHA — gradebook integration (Phase 5a)
+and full backup/privacy provider (Phase 5b) remain planned, so
+operators relying on grade flow should wait for those releases.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 1 — Skeleton | Install schema, capabilities, mod_form, view, privacy provider scaffold, settings-only backup/restore, skeleton tests | shipped v0.1.0 |
 | 2 — Authoring | Manage screen with Items + Bands tabs, CRUD, soft-delete, reorder, band coverage validation, lifecycle gate | shipped v0.2.0 |
 | 3 — Learner submission | Submission form, validation, attempt + response save, scoring engine, band matching with snapshotting, result page, retake callout | **shipped v0.3.0** |
-| 4 — Reporting | Reports tab, expandable detail, CSV export, group-mode awareness | planned |
+| 4 — Reporting | Reports tab, expandable detail, CSV export, group-mode awareness, pagination | **shipped v0.4.0** |
 | 5a — Completion + gradebook | Activity completion, gradebook integration, per-tenant theming hooks | planned |
 | 5b — Backup + privacy | Full backup/restore (items, bands, attempts, responses with snapshot fidelity), privacy provider implementation | planned |
 
@@ -43,7 +42,7 @@ Standard Moodle plugin install:
    ```
 
 3. Confirm install at Site administration > Plugins overview > Activity
-   modules > Scorecard. Expected version: `2026042601`.
+   modules > Scorecard. Expected version: `2026042700`.
 
 Requires Moodle `2024100100` or later (Moodle 4.5+; tested on 5.1.3).
 
@@ -133,7 +132,10 @@ or warned to keep historical attempt scoring stable:
 
 ### Reports tab
 
-Reports land in Phase 4 — the tab is a placeholder for now.
+Manager reports shipped in v0.4.0 — see the [Reports section](#reports)
+below for the full feature description. The Reports tab on manage.php
+redirects to the report page (`report.php`) for users with
+`mod/scorecard:viewreports`.
 
 ## Learner experience
 
@@ -237,8 +239,76 @@ Operators wanting full result-blackout should also disable
 Gradebook integration lands in Phase 5a — submitted attempts compute
 a `totalscore` and store it on the attempt row, but the score isn't
 yet propagated to Moodle's gradebook even when `gradeenabled` is on.
-Multiple-attempt history (a list of all the learner's attempts with
-per-attempt drill-down) is part of Phase 4 reports.
+Multiple-attempt history with per-attempt drill-down lives in the
+manager-only [Reports](#reports) surface; learners themselves see
+only their latest attempt's result.
+
+## Reports
+
+The Reports tab at `report.php?id=<cmid>` lets a manager review
+submitted attempts for a scorecard. The view is gated by
+`mod/scorecard:viewreports`; users without it are redirected to the
+activity view with a clear error notice. Open it from the Reports
+tab on manage.php (which redirects here) or directly via URL.
+
+### Attempts table
+
+Submitted attempts render in a paginated table. Columns: name,
+identity fields (per the site's standard identity-fields
+configuration), attempt number, submitted timestamp, total score,
+max score, percentage, band label.
+
+Each row carries an expandable `<details>` summary block surfacing
+per-item response detail. Items soft-deleted between submit and
+review render with a `[deleted]` prefix; out-of-range responses
+flag with a red audit suffix. Out-of-range values are only possible
+via direct DB tampering or backup/restore mismatch — SPEC §4.5
+blocks scale changes once attempts exist — but defensive flagging
+remains valuable for audit.
+
+### Group filter
+
+The standard Moodle group selector renders above the table. Users
+with `moodle/site:accessallgroups` see the full group list; other
+users see only their own groups. The selection persists across
+pagination — navigating between pages retains the active filter.
+Changing the group filter resets to page 1.
+
+When a specific group is selected and that group has no attempts,
+the table renders the "No attempts in the selected group." empty
+state instead of the generic "No attempts have been submitted yet."
+copy.
+
+### CSV export
+
+The "Export CSV" button above the table is visible to users with
+`mod/scorecard:export`. The export capability is separate from
+`:viewreports` per SPEC §9.1 — operators may grant on-screen viewing
+without download (audit context).
+
+The export is filter-aware: if a group filter is active, only that
+group's attempts export. Identity fields are included per the site's
+identity-fields configuration; per-item response columns include all
+items ever referenced by any attempt in scope (live items first by
+sortorder, then deleted items at the end).
+
+Filename format: `scorecard-{shortname}-attempts-{YYYYMMDD-HHMMSS}.csv`.
+
+The button is hidden when no attempts match the active filter (empty
+CSV downloads aren't a real use case). Direct URL navigation to
+`export.php` when no attempts match redirects back to the report
+page with a notification.
+
+### Pagination
+
+Default page size is 25 attempts per page. Pagination chrome (page
+links, "Previous"/"Next") renders above and below the table when
+total attempts exceed page size. Per-pagination-page response fetch:
+when navigating between pages, only the visible page's
+attempt-detail responses are fetched, so bandwidth scales with page
+size rather than total attempts.
+
+The initials filter (A–Z) is intentionally disabled.
 
 ## Running tests
 
@@ -307,7 +377,7 @@ export, AI-assisted item generation).
 - **LMS Light portable lessons:** [`lms-light-docs/LESSONS.md`](https://github.com/jport500/lms-light-docs/blob/main/LESSONS.md)
   — process patterns and failure modes accumulated across plugin work.
 - **Specification:** [`docs/SPEC.md`](docs/SPEC.md) — current plugin
-  specification (v0.4, unchanged through v0.3.0; sha256-verified
+  specification (v0.4, unchanged through v0.4.0; sha256-verified
   against the canonical raw URL on commit).
 - **Release notes:** [`CHANGES.md`](CHANGES.md).
 
