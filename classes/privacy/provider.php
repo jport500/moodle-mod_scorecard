@@ -29,7 +29,9 @@ use core_privacy\local\metadata\collection;
 use core_privacy\local\request\approved_contextlist;
 use core_privacy\local\request\approved_userlist;
 use core_privacy\local\request\contextlist;
+use core_privacy\local\request\transform;
 use core_privacy\local\request\userlist;
+use core_privacy\local\request\writer;
 
 /**
  * Privacy provider for mod_scorecard.
@@ -65,6 +67,7 @@ class provider implements
 
         $collection->add_database_table('scorecard_responses', [
             'attemptid' => 'privacy:metadata:scorecard_responses:attemptid',
+            'itemid' => 'privacy:metadata:scorecard_responses:itemid',
             'responsevalue' => 'privacy:metadata:scorecard_responses:responsevalue',
             'timecreated' => 'privacy:metadata:scorecard_responses:timecreated',
         ], 'privacy:metadata:scorecard_responses');
@@ -75,13 +78,33 @@ class provider implements
     /**
      * Get all contexts that contain personal data for the specified user.
      *
+     * Resolves to module contexts where the user has rows in
+     * scorecard_attempts. scorecard_responses follow attempts via attemptid
+     * — joining attempts is sufficient to capture the full per-user data
+     * graph for context discovery.
+     *
      * @param int $userid The user to look for.
      * @return contextlist Contexts where this user has scorecard data.
      */
     public static function get_contexts_for_userid(int $userid): contextlist {
-        return new contextlist();
-        // Phase 5b: implement. Resolve module contexts where this user has
-        // any rows in scorecard_attempts (and via attempts, scorecard_responses).
+        $contextlist = new contextlist();
+
+        $sql = "SELECT ctx.id
+                  FROM {course_modules} cm
+                  JOIN {modules} m ON cm.module = m.id AND m.name = :modulename
+                  JOIN {scorecard} s ON cm.instance = s.id
+                  JOIN {context} ctx ON cm.id = ctx.instanceid AND ctx.contextlevel = :contextlevel
+                  JOIN {scorecard_attempts} sa ON s.id = sa.scorecardid
+                 WHERE sa.userid = :userid";
+
+        $params = [
+            'modulename' => 'scorecard',
+            'contextlevel' => CONTEXT_MODULE,
+            'userid' => $userid,
+        ];
+
+        $contextlist->add_from_sql($sql, $params);
+        return $contextlist;
     }
 
     /**
@@ -90,18 +113,129 @@ class provider implements
      * @param userlist $userlist The userlist to add user IDs into.
      */
     public static function get_users_in_context(userlist $userlist): void {
-        // Phase 5b: implement. Add userids of users with attempts in the
-        // module context attached to this scorecard instance.
+        $context = $userlist->get_context();
+        if ($context->contextlevel != CONTEXT_MODULE) {
+            return;
+        }
+
+        $sql = "SELECT sa.userid
+                  FROM {context} ctx
+                  JOIN {course_modules} cm ON cm.id = ctx.instanceid
+                  JOIN {modules} m ON m.id = cm.module AND m.name = :modulename
+                  JOIN {scorecard} s ON s.id = cm.instance
+                  JOIN {scorecard_attempts} sa ON s.id = sa.scorecardid
+                 WHERE ctx.id = :contextid AND ctx.contextlevel = :contextlevel";
+
+        $params = [
+            'modulename' => 'scorecard',
+            'contextlevel' => CONTEXT_MODULE,
+            'contextid' => $context->id,
+        ];
+
+        $userlist->add_from_sql('userid', $sql, $params);
     }
 
     /**
      * Export all personal data for the user in the specified contexts.
      *
+     * Per SPEC §9.5: per-context per-attempt export with snapshotted band
+     * label/message AND current item prompt text (with [deleted] prefix
+     * for soft-deleted items). Per-attempt subcontext lets users navigate
+     * the export package by attempt for retakes-on scorecards.
+     *
+     * Response fetch uses LEFT JOIN on scorecard_items rather than INNER
+     * JOIN: SPEC §4.5 + the lifecycle gate block hard-delete of items
+     * once attempts exist, so the item row should always be present, but
+     * defensive LEFT JOIN protects against direct DB tampering, backup/
+     * restore mismatch, or any future invariant violation. Responses to
+     * items missing entirely render with [deleted] prefix and empty
+     * prompt (graceful degradation rather than silent omission, which
+     * would be a privacy violation).
+     *
      * @param approved_contextlist $contextlist The approved contexts to export.
      */
     public static function export_user_data(approved_contextlist $contextlist): void {
-        // Phase 5b: implement. Export attempts (with snapshotted band label
-        // and message) and per-item responses, scoped to the approved contexts.
+        global $DB;
+
+        if (empty($contextlist->count())) {
+            return;
+        }
+
+        $user = $contextlist->get_user();
+        $userid = (int)$user->id;
+        $deletedprefix = get_string('report:detail:deletedprefix', 'mod_scorecard');
+        $attemptslabel = get_string('privacy:export:attempts', 'mod_scorecard');
+
+        $responsesql = "SELECT r.id, r.itemid, r.responsevalue, r.timecreated,
+                               i.prompt, i.promptformat, i.deleted AS itemdeleted
+                          FROM {scorecard_responses} r
+                     LEFT JOIN {scorecard_items} i ON i.id = r.itemid
+                         WHERE r.attemptid = :attemptid
+                      ORDER BY r.id";
+
+        foreach ($contextlist->get_contextids() as $contextid) {
+            $context = \context::instance_by_id($contextid);
+            if ($context->contextlevel != CONTEXT_MODULE) {
+                continue;
+            }
+
+            $cm = get_coursemodule_from_id('scorecard', $context->instanceid, 0, false, IGNORE_MISSING);
+            if (!$cm) {
+                continue;
+            }
+
+            $attempts = $DB->get_records('scorecard_attempts', [
+                'scorecardid' => (int)$cm->instance,
+                'userid' => $userid,
+            ], 'attemptnumber ASC');
+
+            if (empty($attempts)) {
+                continue;
+            }
+
+            foreach ($attempts as $attempt) {
+                $responses = $DB->get_records_sql($responsesql, [
+                    'attemptid' => (int)$attempt->id,
+                ]);
+
+                $responsesdata = [];
+                foreach ($responses as $r) {
+                    $promptdisplay = '';
+                    if ($r->prompt !== null) {
+                        $promptdisplay = format_text(
+                            (string)$r->prompt,
+                            (int)($r->promptformat ?? FORMAT_HTML),
+                            ['context' => $context]
+                        );
+                    }
+                    if (!empty($r->itemdeleted) || $r->prompt === null) {
+                        $promptdisplay = $deletedprefix . $promptdisplay;
+                    }
+                    $responsesdata[] = (object)[
+                        'prompt' => $promptdisplay,
+                        'response' => (int)$r->responsevalue,
+                        'timecreated' => transform::datetime((int)$r->timecreated),
+                    ];
+                }
+
+                $attemptdata = (object)[
+                    'attemptnumber' => (int)$attempt->attemptnumber,
+                    'totalscore' => (int)$attempt->totalscore,
+                    'maxscore' => (int)$attempt->maxscore,
+                    'percentage' => (float)$attempt->percentage,
+                    'bandlabelsnapshot' => (string)($attempt->bandlabelsnapshot ?? ''),
+                    'bandmessagesnapshot' => (string)($attempt->bandmessagesnapshot ?? ''),
+                    'timecreated' => transform::datetime((int)$attempt->timecreated),
+                    'responses' => $responsesdata,
+                ];
+
+                $subcontext = [
+                    $attemptslabel,
+                    "Attempt {$attempt->attemptnumber}",
+                ];
+                writer::with_context($context)->export_data($subcontext, $attemptdata);
+            }
+        }
     }
 
     /**
