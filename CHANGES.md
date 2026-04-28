@@ -1,5 +1,22 @@
 # mod_scorecard release notes
 
+## v0.7.0 — Phase 6 (JSON templates) (in progress)
+
+### Spec status
+
+`docs/SPEC.md` is at v0.5 (sha256
+`db3c8e5c31cea2662b5a8e413debc5d9ea395cb9683891c92fa6cc282feb5cdd`).
+The 0.4.2 → 0.5.0 sub-decimal bump in sub-step 6.0 added §9.6
+(Templates — JSON export and import) to canonize the format and
+import semantics introduced at this phase: scope (authoring
+structure only); import target (create-new only at v0.7.0); JSON
+envelope versioning via top-level `schema_version`; producer
+fingerprint via nested `plugin` object; ISO 8601 `exported_at`;
+soft-delete exclusion (distinct from §9.4 backup/restore semantics).
+The §14 v1.1 roadmap row "Template import/export" was removed at
+this bump (feature shipped). SPEC sha pinned through the remaining
+Phase 6 sub-steps.
+
 ## v0.6.0 — Phase 5b (Privacy and backup/restore) (2026-04-28)
 
 **MATURITY_ALPHA. Privacy provider, backup, and restore are now

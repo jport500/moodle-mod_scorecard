@@ -451,6 +451,26 @@ Table names use Moodle conventions with prefix `{scorecard...}`. Exact XMLDB def
 - Edge case: a user re-attempts after their prior data was deleted. The plugin treats this as a fresh attempt sequence (attemptnumber resets to 1).
 - Cross-tenant note: per LMS Light architecture (CONTEXT.md), no cross-tenant data sharing exists or is anticipated. The privacy provider operates strictly within the per-tenant Moodle instance.
 
+## 9.6 Templates (JSON export and import)
+
+Phase 6 promoted "Template import/export" from §14 v1.1 roadmap to current scope. This section canonizes the format and import semantics introduced at v0.7.0.
+
+- **Scope:** templates capture authoring structure only — items, bands, and activity settings. User data (attempts and responses) is out of scope; backup/restore (§9.4) is the path for that.
+- **Import target at v0.7.0:** create-new only. Importing a template instantiates a new scorecard activity in the destination course; the import flow never modifies an existing scorecard. Overwrite (replace items + bands of an existing scorecard) and append (add items + bands alongside existing) are deferred to v0.8+ if operator demand surfaces.
+- **Soft-delete exclusion:** rows with `deleted=1` (items or bands) are excluded from export. Templates represent the operator's current intended authoring structure, not historical state. This is the structural distinction from §9.4 backup/restore semantics, which preserve soft-deletes so historical attempts can resolve their original prompt and label text post-restore — templates ship no attempts and so do not require historical resolvability.
+- **Format:** JSON, UTF-8 encoded. Top-level envelope with six fields:
+  - `schema_version` — string. `"1.0"` at v0.7.0. Producers stamp; consumers validate and refuse on unrecognized version.
+  - `plugin` — object: `{ "name": "mod_scorecard", "version": "<plugin release string>" }`. Forensic provenance. Validation may warn on cross-version mismatch but does not block at v1.0.
+  - `exported_at` — ISO 8601 UTC string (e.g., `"2026-04-28T14:30:00Z"`). Operator-facing audit metadata; the JSON envelope is the boundary at which timestamps shift from Moodle internal Unix integers to a human-readable representation.
+  - `scorecard` — settings object. Whitelisted fields from §8.1 excluding `id`, `course`, `timecreated`, `timemodified`. Includes `intro` + `introformat`, `displaystyle` (locked to `radio` per §4.1; round-trip preserved for forward-compat with v1.1 alternates), and `completionsubmit`.
+  - `items` — array of item objects. Whitelisted fields from §8.2 excluding `id`, `scorecardid`, `timecreated`, `timemodified`. Soft-deleted rows excluded; `sortorder` preserved so authoring order round-trips.
+  - `bands` — array of band objects. Whitelisted fields from §8.3 with the same exclusions. Soft-deleted rows excluded.
+- **Intro field round-trip:** imported templates round-trip the `intro` field from the source scorecard. Operators may edit the intro post-import to course-customize content; no import-time UI for intro suppression at v0.7.0 (defer to v0.8+ if operator demand surfaces).
+- **Filename convention** (export download): `<scorecard-name-slugified>-template.json` via `clean_filename(format_string($scorecard->name))`. Operator-meaningful filename matching the convention §10.4 already uses for the report CSV export.
+- **Capabilities:** export gated on `mod/scorecard:manage` (template authoring is an author-side affordance, paralleling the items/bands manage screen). Import capability disposition lands at sub-step 6.5; not specified at this directive.
+
+> **Decision (v0.5):** Templates ship as create-new-only at v0.7.0 with JSON envelope versioning via top-level `schema_version`, producer fingerprint via nested `plugin` object, and ISO 8601 `exported_at`. Soft-deleted authoring rows excluded from export — distinct from §9.4 backup/restore semantics. Intro round-trip-by-default; operator customizes post-import. Overwrite and append import modes, intro-suppression UI, and a database-backed in-platform template library are deferred to v0.8+ pending operator-demand evidence. The §14 v1.1 roadmap row "Template import/export" was removed at this bump (feature shipped).
+
 # 10. User Interface Requirements
 
 ## 10.1 Learner View
@@ -605,7 +625,6 @@ Per LMS Light convention (CONTEXT.md): phpcs clean, PHPUnit green, and CLI smoke
 | PDF result download                    | Useful for coaches, consultants, and professional development plans.                                                                          |
 | Email result to learner                | Useful for follow-up; integrate via Moodle's messaging API, not direct mail.                                                                  |
 | Anonymous mode                         | Useful for organizational pulse surveys.                                                                                                      |
-| Template import/export                 | LMS Light packaged demos and customer onboarding.                                                                                             |
 | AI-assisted item generation            | Per LMS Light AI integration standard, must use Moodle's AI Providers subsystem (Groq is the current provider). Differentiator for LMS Light. |
 
 # 15. Build Plan
@@ -660,4 +679,4 @@ Once the plugin repository exists, capture the following decisions in docs/DECIS
 | "Show previous attempt" is implicit (not a setting). When retakes are off and an attempt exists, the existing result is always displayed.                            | If a customer surfaces a use case for hiding the previous result while preventing resubmission — currently no such case exists.                                                                                                            |
 | Privacy metadata for `scorecard_responses` declares both `attemptid` and `itemid` as graph-traversal links, not just `attemptid`.                                    | Only if Moodle's privacy export infrastructure changes such that FK traversal happens implicitly (currently it does not).                                                                                                                  |
 
-*End of specification — Spec v0.4 — 2026-04-25 — Post-Phase-1 corrections folded in*
+*End of specification — Spec v0.5 — 2026-04-28 — Phase 6 JSON template directive folded in*
