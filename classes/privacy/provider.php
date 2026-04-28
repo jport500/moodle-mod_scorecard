@@ -241,30 +241,118 @@ class provider implements
     /**
      * Delete all personal data for all users in the specified context.
      *
+     * Per SPEC §9.5: delete attempts and responses; preserve the scorecard
+     * activity, its items, and its bands. The authoring surface survives;
+     * only user-generated submission data goes.
+     *
+     * Children-first deletion (responses, then attempts) is required
+     * because Moodle XMLDB foreign keys are advisory rather than DBMS-
+     * enforced — see lib.php::scorecard_delete_instance's docblock for
+     * the cascade-order rationale established in Phase 1. Relying on FK
+     * cascade would orphan response rows; that would be a privacy
+     * violation (the user's response data would persist after a delete
+     * request was honored at the activity level).
+     *
      * @param context $context The context to delete in.
      */
     public static function delete_data_for_all_users_in_context(context $context): void {
-        // Phase 5b: implement. Delete attempts + responses for all users in
-        // this scorecard instance; preserve the scorecard, items, and bands.
+        global $DB;
+
+        if (!$context instanceof \context_module) {
+            return;
+        }
+        $cm = get_coursemodule_from_id('scorecard', $context->instanceid, 0, false, IGNORE_MISSING);
+        if (!$cm) {
+            return;
+        }
+
+        $DB->delete_records_select(
+            'scorecard_responses',
+            'attemptid IN (SELECT id FROM {scorecard_attempts} WHERE scorecardid = :sid)',
+            ['sid' => (int)$cm->instance]
+        );
+        $DB->delete_records('scorecard_attempts', ['scorecardid' => (int)$cm->instance]);
     }
 
     /**
      * Delete personal data for the specified set of users.
      *
+     * Scoped to the userlist's context's scorecard. Deletes attempts +
+     * responses for the listed users; preserves scorecard, items, bands
+     * (SPEC §9.5). Children-first deletion per the advisory-FK rationale
+     * documented on delete_data_for_all_users_in_context.
+     *
      * @param approved_userlist $userlist The approved userlist to delete data for.
      */
     public static function delete_data_for_users(approved_userlist $userlist): void {
-        // Phase 5b: implement. Delete attempts + responses for the listed
-        // users in the userlist's context; preserve the scorecard configuration.
+        global $DB;
+
+        $context = $userlist->get_context();
+        if (!$context instanceof \context_module) {
+            return;
+        }
+        $cm = get_coursemodule_from_id('scorecard', $context->instanceid, 0, false, IGNORE_MISSING);
+        if (!$cm) {
+            return;
+        }
+        $userids = $userlist->get_userids();
+        if (empty($userids)) {
+            return;
+        }
+
+        [$usersql, $userparams] = $DB->get_in_or_equal($userids, SQL_PARAMS_NAMED);
+        $params = ['sid' => (int)$cm->instance] + $userparams;
+
+        $DB->delete_records_select(
+            'scorecard_responses',
+            "attemptid IN (SELECT id FROM {scorecard_attempts} WHERE scorecardid = :sid AND userid {$usersql})",
+            $params
+        );
+        $DB->delete_records_select(
+            'scorecard_attempts',
+            "scorecardid = :sid AND userid {$usersql}",
+            $params
+        );
     }
 
     /**
      * Delete all personal data for the specified user across the listed contexts.
      *
+     * Per-context loop; each cm context resolves to a scorecard instance;
+     * deletes attempts + responses scoped to (scorecardid, userid).
+     * Preserves scorecard, items, bands (SPEC §9.5). Children-first
+     * deletion per the advisory-FK rationale documented on
+     * delete_data_for_all_users_in_context.
+     *
      * @param approved_contextlist $contextlist The approved contexts and user.
      */
     public static function delete_data_for_user(approved_contextlist $contextlist): void {
-        // Phase 5b: implement. Delete attempts + responses for the user
-        // across the approved contexts; preserve the scorecard configuration.
+        global $DB;
+
+        if (empty($contextlist->count())) {
+            return;
+        }
+        $userid = (int)$contextlist->get_user()->id;
+
+        foreach ($contextlist->get_contextids() as $contextid) {
+            $context = \context::instance_by_id($contextid);
+            if (!$context instanceof \context_module) {
+                continue;
+            }
+            $cm = get_coursemodule_from_id('scorecard', $context->instanceid, 0, false, IGNORE_MISSING);
+            if (!$cm) {
+                continue;
+            }
+
+            $DB->delete_records_select(
+                'scorecard_responses',
+                'attemptid IN (SELECT id FROM {scorecard_attempts} WHERE scorecardid = :sid AND userid = :userid)',
+                ['sid' => (int)$cm->instance, 'userid' => $userid]
+            );
+            $DB->delete_records('scorecard_attempts', [
+                'scorecardid' => (int)$cm->instance,
+                'userid' => $userid,
+            ]);
+        }
     }
 }

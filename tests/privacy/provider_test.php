@@ -31,6 +31,7 @@ namespace mod_scorecard\privacy;
 
 use core_privacy\local\metadata\collection;
 use core_privacy\local\request\approved_contextlist;
+use core_privacy\local\request\approved_userlist;
 use core_privacy\local\request\userlist;
 use core_privacy\local\request\writer;
 use PHPUnit\Framework\Attributes\CoversNothing;
@@ -303,5 +304,273 @@ final class provider_test extends \core_privacy\tests\provider_testcase {
             $deletedprefix,
             $data->responses[1]->prompt
         );
+    }
+
+    /**
+     * Build a course + scorecard + items + band + per-user attempts fixture.
+     *
+     * 5b.2 helper extraction: 3 delete tests need multi-user fixtures.
+     * make_fixture (used by 5b.1's export tests) creates a 1-user shape;
+     * this helper creates a 1-band-1-scorecard fixture with one attempt
+     * per user and 2 responses per attempt. Reusable by 5b.4 backup +
+     * 5b.5 restore work where multi-user fixtures will be needed again.
+     *
+     * @param array $userids User ids to create attempts for.
+     * @return array{scorecard: \stdClass, cm: \stdClass, course: \stdClass, items: array, bandid: int, attempts: array}
+     */
+    private function make_fixture_with_users(array $userids): array {
+        global $DB;
+
+        $course = $this->getDataGenerator()->create_course();
+        $scorecard = $this->getDataGenerator()->create_module('scorecard', (object)[
+            'course' => $course->id,
+            'name' => 'Multi-user fixture scorecard',
+            'gradeenabled' => 0,
+            'scalemin' => 1,
+            'scalemax' => 10,
+        ]);
+        $cm = \get_coursemodule_from_instance('scorecard', $scorecard->id, $course->id, false, MUST_EXIST);
+
+        $now = time();
+        $itemid1 = (int)$DB->insert_record('scorecard_items', (object)[
+            'scorecardid' => $scorecard->id,
+            'prompt' => 'Item 1',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+            'deleted' => 0,
+            'sortorder' => 1,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+        $itemid2 = (int)$DB->insert_record('scorecard_items', (object)[
+            'scorecardid' => $scorecard->id,
+            'prompt' => 'Item 2',
+            'promptformat' => FORMAT_HTML,
+            'visible' => 1,
+            'deleted' => 0,
+            'sortorder' => 2,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+        $bandid = (int)$DB->insert_record('scorecard_bands', (object)[
+            'scorecardid' => $scorecard->id,
+            'minscore' => 0,
+            'maxscore' => 20,
+            'label' => 'Test band',
+            'message' => '',
+            'messageformat' => FORMAT_HTML,
+            'sortorder' => 1,
+            'deleted' => 0,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ]);
+
+        $attempts = [];
+        foreach ($userids as $userid) {
+            $attemptid = (int)$DB->insert_record('scorecard_attempts', (object)[
+                'scorecardid' => $scorecard->id,
+                'userid' => $userid,
+                'attemptnumber' => 1,
+                'totalscore' => 14,
+                'maxscore' => 20,
+                'percentage' => 70.0,
+                'bandid' => $bandid,
+                'bandlabelsnapshot' => 'Test band',
+                'bandmessagesnapshot' => '',
+                'bandmessageformatsnapshot' => FORMAT_HTML,
+                'timecreated' => $now,
+                'timemodified' => $now,
+            ]);
+            $DB->insert_record('scorecard_responses', (object)[
+                'attemptid' => $attemptid,
+                'itemid' => $itemid1,
+                'responsevalue' => 7,
+                'timecreated' => $now,
+            ]);
+            $DB->insert_record('scorecard_responses', (object)[
+                'attemptid' => $attemptid,
+                'itemid' => $itemid2,
+                'responsevalue' => 7,
+                'timecreated' => $now,
+            ]);
+            $attempts[$userid] = $attemptid;
+        }
+
+        return [
+            'scorecard' => $scorecard,
+            'cm' => $cm,
+            'course' => $course,
+            'items' => [$itemid1, $itemid2],
+            'bandid' => $bandid,
+            'attempts' => $attempts,
+        ];
+    }
+
+    /**
+     * delete_data_for_all_users_in_context removes all attempts + responses
+     * for every user in the given cm context, while preserving the
+     * scorecard, its items, and its bands (SPEC §9.5).
+     */
+    public function test_delete_data_for_all_users_in_context(): void {
+        $this->resetAfterTest();
+        global $DB;
+
+        $user1 = $this->getDataGenerator()->create_user();
+        $user2 = $this->getDataGenerator()->create_user();
+        $fixture = $this->make_fixture_with_users([(int)$user1->id, (int)$user2->id]);
+        $context = \context_module::instance($fixture['cm']->id);
+
+        // Pre-state: 2 attempts, 4 responses.
+        $this->assertEquals(2, $DB->count_records(
+            'scorecard_attempts',
+            ['scorecardid' => $fixture['scorecard']->id]
+        ));
+
+        provider::delete_data_for_all_users_in_context($context);
+
+        // All attempts + responses gone for this scorecard.
+        $this->assertEquals(0, $DB->count_records(
+            'scorecard_attempts',
+            ['scorecardid' => $fixture['scorecard']->id]
+        ));
+        $this->assertFalse($DB->record_exists(
+            'scorecard_responses',
+            ['attemptid' => $fixture['attempts'][(int)$user1->id]]
+        ));
+        $this->assertFalse($DB->record_exists(
+            'scorecard_responses',
+            ['attemptid' => $fixture['attempts'][(int)$user2->id]]
+        ));
+
+        // Scorecard structure preserved.
+        $this->assertTrue($DB->record_exists(
+            'scorecard',
+            ['id' => $fixture['scorecard']->id]
+        ));
+        $this->assertEquals(2, $DB->count_records(
+            'scorecard_items',
+            ['scorecardid' => $fixture['scorecard']->id]
+        ));
+        $this->assertTrue($DB->record_exists(
+            'scorecard_bands',
+            ['id' => $fixture['bandid']]
+        ));
+    }
+
+    /**
+     * delete_data_for_user removes only the target user's attempts +
+     * responses, leaving other users' data and the scorecard structure
+     * untouched (SPEC §9.5).
+     */
+    public function test_delete_data_for_user(): void {
+        $this->resetAfterTest();
+        global $DB;
+
+        $target = $this->getDataGenerator()->create_user();
+        $unrelated = $this->getDataGenerator()->create_user();
+        $fixture = $this->make_fixture_with_users([(int)$target->id, (int)$unrelated->id]);
+        $context = \context_module::instance($fixture['cm']->id);
+
+        $contextlist = new approved_contextlist(
+            $target,
+            'mod_scorecard',
+            [$context->id]
+        );
+        provider::delete_data_for_user($contextlist);
+
+        // Target's data gone.
+        $this->assertFalse($DB->record_exists('scorecard_attempts', [
+            'scorecardid' => $fixture['scorecard']->id,
+            'userid' => $target->id,
+        ]));
+        $this->assertFalse($DB->record_exists(
+            'scorecard_responses',
+            ['attemptid' => $fixture['attempts'][(int)$target->id]]
+        ));
+
+        // Unrelated user's data preserved.
+        $this->assertTrue($DB->record_exists('scorecard_attempts', [
+            'scorecardid' => $fixture['scorecard']->id,
+            'userid' => $unrelated->id,
+        ]));
+        $this->assertEquals(2, $DB->count_records(
+            'scorecard_responses',
+            ['attemptid' => $fixture['attempts'][(int)$unrelated->id]]
+        ));
+
+        // Scorecard structure preserved.
+        $this->assertTrue($DB->record_exists(
+            'scorecard',
+            ['id' => $fixture['scorecard']->id]
+        ));
+        $this->assertEquals(2, $DB->count_records(
+            'scorecard_items',
+            ['scorecardid' => $fixture['scorecard']->id]
+        ));
+        $this->assertTrue($DB->record_exists(
+            'scorecard_bands',
+            ['id' => $fixture['bandid']]
+        ));
+    }
+
+    /**
+     * delete_data_for_users removes attempts + responses for the listed
+     * users only, preserving non-listed users' data and the scorecard
+     * structure (SPEC §9.5).
+     */
+    public function test_delete_data_for_users(): void {
+        $this->resetAfterTest();
+        global $DB;
+
+        $user1 = $this->getDataGenerator()->create_user();
+        $user2 = $this->getDataGenerator()->create_user();
+        $user3 = $this->getDataGenerator()->create_user();
+        $fixture = $this->make_fixture_with_users([
+            (int)$user1->id,
+            (int)$user2->id,
+            (int)$user3->id,
+        ]);
+        $context = \context_module::instance($fixture['cm']->id);
+
+        $userlist = new approved_userlist(
+            $context,
+            'mod_scorecard',
+            [(int)$user1->id, (int)$user2->id]
+        );
+        provider::delete_data_for_users($userlist);
+
+        // Approved 2 users' data gone.
+        $this->assertFalse($DB->record_exists('scorecard_attempts', [
+            'scorecardid' => $fixture['scorecard']->id,
+            'userid' => $user1->id,
+        ]));
+        $this->assertFalse($DB->record_exists('scorecard_attempts', [
+            'scorecardid' => $fixture['scorecard']->id,
+            'userid' => $user2->id,
+        ]));
+
+        // Third user's data preserved.
+        $this->assertTrue($DB->record_exists('scorecard_attempts', [
+            'scorecardid' => $fixture['scorecard']->id,
+            'userid' => $user3->id,
+        ]));
+        $this->assertEquals(2, $DB->count_records(
+            'scorecard_responses',
+            ['attemptid' => $fixture['attempts'][(int)$user3->id]]
+        ));
+
+        // Scorecard structure preserved.
+        $this->assertTrue($DB->record_exists(
+            'scorecard',
+            ['id' => $fixture['scorecard']->id]
+        ));
+        $this->assertEquals(2, $DB->count_records(
+            'scorecard_items',
+            ['scorecardid' => $fixture['scorecard']->id]
+        ));
+        $this->assertTrue($DB->record_exists(
+            'scorecard_bands',
+            ['id' => $fixture['bandid']]
+        ));
     }
 }
