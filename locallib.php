@@ -1260,3 +1260,110 @@ function scorecard_recompute_grade_if_no_attempts(int $scorecardid): void {
     $scorecard = $DB->get_record('scorecard', ['id' => $scorecardid], '*', MUST_EXIST);
     scorecard_update_grades($scorecard);
 }
+
+/**
+ * Build a JSON-serialisable template envelope for a scorecard's authoring structure.
+ *
+ * Phase 6.1 helper — pure function returning the nested array shape canonised
+ * in SPEC §9.6. The caller (template_export.php endpoint, or PHPUnit tests)
+ * json_encodes + sends; this helper does no I/O beyond the three SELECTs it
+ * needs.
+ *
+ * Reads the scorecard row, non-deleted items (sortorder ASC), and non-deleted
+ * bands (sortorder ASC). Soft-deleted rows are excluded — templates represent
+ * the operator's CURRENT intended authoring structure, not historical state.
+ * This is the structural distinction from §9.4 backup/restore semantics which
+ * preserve soft-deletes for historical attempt resolution.
+ *
+ * Whitelist projection per SPEC §9.6: each field is enumerated explicitly with
+ * its native type cast (int for numeric columns, string for text/char), so
+ * future schema additions to {scorecard}, {scorecard_items}, or
+ * {scorecard_bands} do not accidentally leak into templates and the JSON
+ * carries native types rather than DB-string-typed scalars.
+ *
+ * Producer fingerprint (`plugin.version`) reads from
+ * `\core_plugin_manager::instance()->get_plugin_info('mod_scorecard')->release`
+ * — the canonical Moodle accessor for the version.php release string. The
+ * plugin manager loads this metadata during its standard lifecycle so the
+ * call works in production and PHPUnit (Moodle's test bootstrap initialises
+ * the plugin manager).
+ *
+ * `exported_at` is ISO 8601 UTC via `gmdate('Y-m-d\TH:i:s\Z', time())`,
+ * matching established Moodle convention for timestamp generation at file
+ * boundaries.
+ *
+ * @param int $scorecardid Source scorecard's id.
+ * @return array Envelope per SPEC §9.6: keys schema_version, plugin,
+ *               exported_at, scorecard, items, bands.
+ */
+function scorecard_template_export(int $scorecardid): array {
+    global $DB;
+
+    $scorecardrow = $DB->get_record(
+        'scorecard',
+        ['id' => $scorecardid],
+        '*',
+        MUST_EXIST
+    );
+    $items = $DB->get_records(
+        'scorecard_items',
+        ['scorecardid' => $scorecardid, 'deleted' => 0],
+        'sortorder ASC, id ASC'
+    );
+    $bands = $DB->get_records(
+        'scorecard_bands',
+        ['scorecardid' => $scorecardid, 'deleted' => 0],
+        'sortorder ASC, id ASC'
+    );
+
+    $info = \core_plugin_manager::instance()->get_plugin_info('mod_scorecard');
+
+    return [
+        'schema_version' => '1.0',
+        'plugin' => [
+            'name' => 'mod_scorecard',
+            'version' => (string)($info->release ?? ''),
+        ],
+        'exported_at' => gmdate('Y-m-d\TH:i:s\Z', time()),
+        'scorecard' => [
+            'name' => (string)$scorecardrow->name,
+            'intro' => (string)($scorecardrow->intro ?? ''),
+            'introformat' => (int)$scorecardrow->introformat,
+            'scalemin' => (int)$scorecardrow->scalemin,
+            'scalemax' => (int)$scorecardrow->scalemax,
+            'displaystyle' => (string)$scorecardrow->displaystyle,
+            'lowlabel' => (string)($scorecardrow->lowlabel ?? ''),
+            'highlabel' => (string)($scorecardrow->highlabel ?? ''),
+            'allowretakes' => (int)$scorecardrow->allowretakes,
+            'showresult' => (int)$scorecardrow->showresult,
+            'showpercentage' => (int)$scorecardrow->showpercentage,
+            'showitemsummary' => (int)$scorecardrow->showitemsummary,
+            'fallbackmessage' => (string)($scorecardrow->fallbackmessage ?? ''),
+            'fallbackmessageformat' => (int)$scorecardrow->fallbackmessageformat,
+            'gradeenabled' => (int)$scorecardrow->gradeenabled,
+            'grade' => (int)$scorecardrow->grade,
+            'completionsubmit' => (int)$scorecardrow->completionsubmit,
+        ],
+        'items' => array_map(static function (\stdClass $item): array {
+            return [
+                'prompt' => (string)$item->prompt,
+                'promptformat' => (int)$item->promptformat,
+                'lowlabel' => (string)($item->lowlabel ?? ''),
+                'highlabel' => (string)($item->highlabel ?? ''),
+                'required' => (int)$item->required,
+                'visible' => (int)$item->visible,
+                'sortorder' => (int)$item->sortorder,
+            ];
+        }, array_values($items)),
+        'bands' => array_map(static function (\stdClass $band): array {
+            return [
+                'minscore' => (int)$band->minscore,
+                'maxscore' => (int)$band->maxscore,
+                'label' => (string)$band->label,
+                'message' => (string)($band->message ?? ''),
+                'messageformat' => (int)$band->messageformat,
+                'sortorder' => (int)$band->sortorder,
+            ];
+        }, array_values($bands)),
+    ];
+}

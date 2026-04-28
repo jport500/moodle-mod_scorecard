@@ -205,6 +205,9 @@ $PAGE->add_body_class('limitedwidth');
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('manage:heading', 'mod_scorecard'));
 
+$renderer = $PAGE->get_renderer('mod_scorecard');
+echo $renderer->render_template_export_affordance($cm->id);
+
 $tabs = [
     new tabobject(
         'items',

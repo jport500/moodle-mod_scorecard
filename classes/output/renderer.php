@@ -255,6 +255,35 @@ class renderer extends plugin_renderer_base {
     }
 
     /**
+     * Render the "Export template" affordance shown above the manage tabs.
+     *
+     * Phase 6.1: top-level operation surfaced from any tab on manage.php
+     * because templates encompass items + bands + settings together. Placed
+     * above the tab tree so the affordance reads as a scorecard-level action,
+     * not an items- or bands-only one. Styled outline-secondary to match the
+     * "Manage scorecard" affordance on view.php (sibling small-secondary
+     * action class) — neither competes with the primary authoring buttons
+     * inside each tab.
+     *
+     * @param int $cmid Course module id; the link target's id parameter.
+     * @return string Rendered HTML.
+     */
+    public function render_template_export_affordance(int $cmid): string {
+        $exporturl = new moodle_url('/mod/scorecard/template_export.php', ['id' => $cmid]);
+        return html_writer::div(
+            html_writer::link(
+                $exporturl,
+                get_string('template:export:button', 'mod_scorecard'),
+                [
+                    'class' => 'btn btn-outline-secondary btn-sm',
+                    'title' => get_string('template:export:tooltip', 'mod_scorecard'),
+                ]
+            ),
+            'scorecard-template-export-affordance mb-3'
+        );
+    }
+
+    /**
      * Render the persistent "Manage scorecard" affordance for view.php.
      *
      * view.php's capability-ordered branching routes the submit-cap branch
