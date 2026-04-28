@@ -25,14 +25,18 @@
 /**
  * Define the complete scorecard structure for backup.
  *
- * Phase 1.4: only the {scorecard} row is captured (settings round-trip).
- * Items, bands, attempts, and responses are NOT yet backed up — those
- * nested elements land in Phase 5b.
+ * Phase 1.4 shipped settings-only backup (just the {scorecard} row).
+ * Phase 5b.3 adds nested backup elements for scorecard_items and
+ * scorecard_bands — both part of the activity's authoring structure
+ * (always included, regardless of user data setting). Phase 5b.4
+ * follows with attempts + responses (userdata-gated). Phase 5b.5
+ * handles the restore side.
  *
- * Phase 5b prerequisite: add nested backup_nested_element children for
- * scorecard_items, scorecard_bands, scorecard_attempts (with snapshot
- * columns) and scorecard_responses; set their sources; preserve the
- * attempt-side band snapshot verbatim on restore.
+ * Per SPEC §9.4: items and bands are backed up "including soft-deleted
+ * ones, to preserve historical reporting" — the SQL sources here
+ * deliberately include rows where `deleted = 1`, so the deleted flag
+ * round-trips and historical attempts can resolve their original
+ * prompt/label text post-restore.
  */
 class backup_scorecard_activity_structure_step extends backup_activity_structure_step {
     /**
@@ -43,6 +47,9 @@ class backup_scorecard_activity_structure_step extends backup_activity_structure
     protected function define_structure() {
         // Root element: the scorecard row. Excludes id (handled by backup
         // framework) and course (replaced with new courseid by restore).
+        // The completionsubmit field was added in Phase 5a.4 (savepoint
+        // 2026042701) but missed from this declaration in v0.5.0; Phase
+        // 5b.3 restores it as the root-element completeness fix.
         $scorecard = new backup_nested_element('scorecard', ['id'], [
             'name', 'intro', 'introformat',
             'scalemin', 'scalemax', 'displaystyle',
@@ -50,14 +57,61 @@ class backup_scorecard_activity_structure_step extends backup_activity_structure
             'allowretakes', 'showresult', 'showpercentage', 'showitemsummary',
             'fallbackmessage', 'fallbackmessageformat',
             'gradeenabled', 'grade',
+            'completionsubmit',
             'timecreated', 'timemodified',
         ]);
 
-        // Source: the {scorecard} row keyed by activity id.
-        $scorecard->set_source_table('scorecard', ['id' => backup::VAR_ACTIVITYID]);
+        // Items container + row element. Excludes id (attribute) and
+        // scorecardid (FK to parent, set by source).
+        $items = new backup_nested_element('items');
+        $item = new backup_nested_element('item', ['id'], [
+            'prompt', 'promptformat',
+            'lowlabel', 'highlabel',
+            'required', 'visible', 'deleted',
+            'sortorder',
+            'timecreated', 'timemodified',
+        ]);
 
-        // Annotate file areas. Phase 1.4 has no file areas in fallbackmessage
-        // (editor has maxfiles=0); kept here for completeness with a no-op call.
+        // Bands container + row element. Same exclusions as items.
+        $bands = new backup_nested_element('bands');
+        $band = new backup_nested_element('band', ['id'], [
+            'minscore', 'maxscore',
+            'label', 'message', 'messageformat',
+            'sortorder', 'deleted',
+            'timecreated', 'timemodified',
+        ]);
+
+        // Build the tree.
+        $scorecard->add_child($items);
+        $items->add_child($item);
+        $scorecard->add_child($bands);
+        $bands->add_child($band);
+
+        // Sources. Items + bands ordered by sortorder (with id as the
+        // stable secondary key) so backup XML row order matches authoring
+        // order. No `deleted = 0` filter — soft-deleted rows must round-
+        // trip per SPEC §9.4.
+        $scorecard->set_source_table('scorecard', ['id' => backup::VAR_ACTIVITYID]);
+        $item->set_source_table(
+            'scorecard_items',
+            ['scorecardid' => backup::VAR_PARENTID],
+            'sortorder ASC, id ASC'
+        );
+        $band->set_source_table(
+            'scorecard_bands',
+            ['scorecardid' => backup::VAR_PARENTID],
+            'sortorder ASC, id ASC'
+        );
+
+        // No file annotations: scorecard_items.prompt and scorecard_bands.message
+        // use format_text directly without file_save_draft_area_files (Phase 2
+        // authoring code path), so no file areas are registered against these
+        // tables. fallbackmessage on the scorecard row likewise has maxfiles=0
+        // per Phase 1's mod_form.php editor config. Phase 5b.3 adds none.
+        //
+        // No id annotations: items + bands don't reference other tables at this
+        // layer. attempts → responses → items cross-reference via
+        // scorecard_responses.itemid lands in 5b.4.
 
         return $this->prepare_activity_structure($scorecard);
     }
