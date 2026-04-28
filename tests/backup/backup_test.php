@@ -17,14 +17,20 @@
 /**
  * Backup tests for mod_scorecard.
  *
- * Phase 5b.3: tests the nested backup elements for scorecard_items and
+ * Phase 5b.3: nested backup elements for scorecard_items and
  * scorecard_bands. SPEC §9.4 directives pinned: soft-deleted items and
  * bands must round-trip in backup XML to preserve historical reporting.
  * Plus a regression-guard test for the completionsubmit root-element
  * field (the v0.5.0 completeness fix bundled into 5b.3).
  *
- * Phase 5b.4 will extend with userdata-gated tests for attempts +
- * responses; Phase 5b.5 will add restore-side round-trip tests.
+ * Phase 5b.4: userdata-gated tests for scorecard_attempts and
+ * scorecard_responses. SPEC §9.4 user-data gating pinned: attempts +
+ * responses included only when the userinfo backup setting is on.
+ * SPEC §11.2 snapshot-fidelity directive pinned: bandid,
+ * bandlabelsnapshot, bandmessagesnapshot, bandmessageformatsnapshot,
+ * totalscore, maxscore, percentage all round-trip verbatim.
+ *
+ * Phase 5b.5 will add restore-side round-trip tests.
  *
  * @package    mod_scorecard
  * @category   test
@@ -47,16 +53,24 @@ require_once($CFG->dirroot . '/backup/util/includes/backup_includes.php');
 #[CoversNothing]
 final class backup_test extends \advanced_testcase {
     /**
-     * Build a course + scorecard + items + bands fixture.
+     * Build a course + scorecard + items + bands fixture, optionally
+     * with attempts + responses for the supplied userids.
      *
      * Returns the course module record (cm) so callers can pass cm->id
      * to backup_controller. The fixture deliberately includes one
      * soft-deleted item and one soft-deleted band so the SPEC §9.4
      * "soft-deleted included" directive can be empirically pinned.
      *
-     * @return array{cm: \stdClass, scorecard: \stdClass, items: array, bands: array}
+     * Phase 5b.4: when $userids is non-empty, creates one attempt per
+     * user with distinctive snapshot field values (so SPEC §11.2 round-
+     * trip can be verified verbatim) plus one response per item per
+     * attempt (covering both the visible and the soft-deleted item, so
+     * the response-to-soft-deleted-item case is exercised too).
+     *
+     * @param int[] $userids Optional userids to create attempts for.
+     * @return array{cm: \stdClass, scorecard: \stdClass, items: array, bands: array, attempts: array, responses: array}
      */
-    private function make_backup_fixture(): array {
+    private function make_backup_fixture(array $userids = []): array {
         global $DB;
 
         $course = $this->getDataGenerator()->create_course();
@@ -123,11 +137,50 @@ final class backup_test extends \advanced_testcase {
             'timemodified' => $now,
         ]);
 
+        // Phase 5b.4: optional attempts + responses per userid. Snapshot
+        // values are deliberately distinctive (and deliberately differ
+        // from the visible band's current label/message) so the SPEC
+        // §11.2 round-trip pin can verify exact preservation rather than
+        // a re-render from current band state. One response per item
+        // per attempt — including the soft-deleted item, since users may
+        // have submitted before the item was soft-deleted.
+        $attempts = [];
+        $responses = [];
+        foreach (array_values($userids) as $i => $userid) {
+            $attemptid = (int)$DB->insert_record('scorecard_attempts', (object)[
+                'scorecardid' => $scorecard->id,
+                'userid' => $userid,
+                'attemptnumber' => 1,
+                'totalscore' => 8 + $i,
+                'maxscore' => 10,
+                'percentage' => 80.00 + $i,
+                'bandid' => $bandvisible,
+                'bandlabelsnapshot' => 'Frozen snapshot label ' . $i,
+                'bandmessagesnapshot' => '<p>Frozen snapshot message ' . $i . '</p>',
+                'bandmessageformatsnapshot' => FORMAT_HTML,
+                'timecreated' => $now,
+                'timemodified' => $now,
+            ]);
+            $attempts[$userid] = $attemptid;
+            $responses[$userid] = [];
+            foreach ([$itemvisible, $itemdeleted] as $itemid) {
+                $responseid = (int)$DB->insert_record('scorecard_responses', (object)[
+                    'attemptid' => $attemptid,
+                    'itemid' => $itemid,
+                    'responsevalue' => 8,
+                    'timecreated' => $now,
+                ]);
+                $responses[$userid][$itemid] = $responseid;
+            }
+        }
+
         return [
             'cm' => $cm,
             'scorecard' => $scorecard,
             'items' => ['visible' => $itemvisible, 'deleted' => $itemdeleted],
             'bands' => ['visible' => $bandvisible, 'deleted' => $banddeleted],
+            'attempts' => $attempts,
+            'responses' => $responses,
         ];
     }
 
@@ -140,10 +193,15 @@ final class backup_test extends \advanced_testcase {
      * a temp directory, parse scorecard.xml. Cleanup on resetAfterTest
      * via $CFG->dataroot/temp lifecycle.
      *
+     * Phase 5b.4: $userinfo toggles the root-level 'users' setting
+     * before plan execution, which propagates to the activity-level
+     * userinfo setting that gates attempts + responses sources.
+     *
      * @param int $cmid Course module id.
+     * @param bool $userinfo Whether to include user data in the backup.
      * @return \SimpleXMLElement Parsed scorecard.xml.
      */
-    private function backup_and_parse_scorecard_xml(int $cmid): \SimpleXMLElement {
+    private function backup_and_parse_scorecard_xml(int $cmid, bool $userinfo = true): \SimpleXMLElement {
         global $CFG, $USER;
 
         // The backup_controller requires a valid user; PHPUnit does not
@@ -161,11 +219,15 @@ final class backup_test extends \advanced_testcase {
             \backup::MODE_GENERAL,
             $USER->id
         );
+        // Toggle the user-data setting before plan execution. The root
+        // 'users' setting drives the activity-level userinfo derived
+        // setting that gates attempts + responses sources.
+        $bc->get_plan()->get_setting('users')->set_value($userinfo);
         $bc->execute_plan();
         $results = $bc->get_results();
         $file = $results['backup_destination'];
         $packer = \get_file_packer('application/vnd.moodle.backup');
-        $extractpath = $CFG->dataroot . '/temp/backup/test-scorecard-backup-' . $cmid;
+        $extractpath = $CFG->dataroot . '/temp/backup/test-scorecard-backup-' . $cmid . '-' . ($userinfo ? 'on' : 'off');
         $file->extract_to_pathname($packer, $extractpath);
         $bc->destroy();
 
@@ -292,5 +354,109 @@ final class backup_test extends \advanced_testcase {
         );
         // Fixture sets completionsubmit=1; verify the value round-trips.
         $this->assertEquals('1', (string)$scorecard->completionsubmit);
+    }
+
+    /**
+     * SPEC §9.4 user-data gating directive (positive case): attempts
+     * round-trip in backup XML when the userinfo setting is on.
+     */
+    public function test_backup_includes_attempts_when_userinfo_enabled(): void {
+        $this->resetAfterTest();
+        $user = $this->getDataGenerator()->create_user();
+        $fixture = $this->make_backup_fixture([(int)$user->id]);
+        $xml = $this->backup_and_parse_scorecard_xml((int)$fixture['cm']->id, true);
+
+        $attempts = $xml->xpath('//attempts/attempt');
+        $this->assertCount(1, $attempts, 'Userinfo-on backup should include the attempt.');
+        $this->assertEquals((string)$user->id, (string)$attempts[0]->userid);
+    }
+
+    /**
+     * SPEC §9.4 user-data gating directive (negative case): attempts
+     * are absent from backup XML when the userinfo setting is off.
+     */
+    public function test_backup_excludes_attempts_when_userinfo_disabled(): void {
+        $this->resetAfterTest();
+        $user = $this->getDataGenerator()->create_user();
+        $fixture = $this->make_backup_fixture([(int)$user->id]);
+        $xml = $this->backup_and_parse_scorecard_xml((int)$fixture['cm']->id, false);
+
+        $attempts = $xml->xpath('//attempts/attempt');
+        $this->assertCount(0, $attempts, 'Userinfo-off backup should exclude attempts (SPEC §9.4 user-data gating).');
+    }
+
+    /**
+     * Responses round-trip in backup XML when userinfo is on. Fixture
+     * creates one response per item per attempt (visible + soft-deleted
+     * items both, so a response to a soft-deleted item is exercised).
+     */
+    public function test_backup_includes_responses_when_userinfo_enabled(): void {
+        $this->resetAfterTest();
+        $user = $this->getDataGenerator()->create_user();
+        $fixture = $this->make_backup_fixture([(int)$user->id]);
+        $xml = $this->backup_and_parse_scorecard_xml((int)$fixture['cm']->id, true);
+
+        $responses = $xml->xpath('//attempts/attempt/responses/response');
+        $this->assertCount(2, $responses, 'Userinfo-on backup should include all responses for the attempt.');
+
+        $itemids = [];
+        foreach ($responses as $r) {
+            $itemids[] = (int)$r->itemid;
+        }
+        $this->assertContains((int)$fixture['items']['visible'], $itemids);
+        $this->assertContains(
+            (int)$fixture['items']['deleted'],
+            $itemids,
+            'Response to soft-deleted item should round-trip.'
+        );
+    }
+
+    /**
+     * SPEC §11.2 directive pin: snapshot fields round-trip verbatim.
+     *
+     * Single comprehensive assertion covering all four snapshot fields
+     * (bandid, bandlabelsnapshot, bandmessagesnapshot,
+     * bandmessageformatsnapshot) plus the totalscore/maxscore/percentage
+     * trio. If any field is dropped from the row element list in a
+     * future edit, this test fails immediately. The fixture deliberately
+     * stores label/message values that differ from the visible band's
+     * current values, so a re-render regression would fail visibly.
+     */
+    public function test_backup_preserves_all_snapshot_fields(): void {
+        $this->resetAfterTest();
+        $user = $this->getDataGenerator()->create_user();
+        $fixture = $this->make_backup_fixture([(int)$user->id]);
+        $xml = $this->backup_and_parse_scorecard_xml((int)$fixture['cm']->id, true);
+
+        $attempts = $xml->xpath('//attempts/attempt');
+        $this->assertCount(1, $attempts);
+        $attempt = $attempts[0];
+
+        // Snapshot fields (all four).
+        $this->assertEquals(
+            (string)$fixture['bands']['visible'],
+            (string)$attempt->bandid,
+            'bandid round-trips verbatim.'
+        );
+        $this->assertEquals(
+            'Frozen snapshot label 0',
+            (string)$attempt->bandlabelsnapshot,
+            'bandlabelsnapshot round-trips verbatim (distinct from current band label).'
+        );
+        $this->assertEquals(
+            '<p>Frozen snapshot message 0</p>',
+            (string)$attempt->bandmessagesnapshot,
+            'bandmessagesnapshot round-trips verbatim (distinct from current band message).'
+        );
+        $this->assertEquals(
+            (string)FORMAT_HTML,
+            (string)$attempt->bandmessageformatsnapshot,
+            'bandmessageformatsnapshot round-trips verbatim.'
+        );
+
+        // Score trio.
+        $this->assertEquals('8', (string)$attempt->totalscore, 'totalscore round-trips verbatim.');
+        $this->assertEquals('10', (string)$attempt->maxscore, 'maxscore round-trips verbatim.');
+        $this->assertEquals(80.00, (float)$attempt->percentage, 'percentage round-trips verbatim.');
     }
 }
