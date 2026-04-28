@@ -1367,3 +1367,350 @@ function scorecard_template_export(int $scorecardid): array {
         }, array_values($bands)),
     ];
 }
+
+/**
+ * Validate a parsed JSON template against the SPEC §9.6 schema.
+ *
+ * Phase 6.3 helper — pure function, no I/O, no $DB. Caller (sub-step 6.5
+ * import endpoint, or PHPUnit tests) has already json_decoded the uploaded
+ * file with assoc=true; this helper validates the resulting nested array
+ * against the canonised envelope shape.
+ *
+ * Returns a two-array structure: `['errors' => [...], 'warnings' => [...]]`.
+ * Empty errors means the template is importable; warnings are advisory and
+ * never block import. Each entry is a struct with keys `path` (dot-separated
+ * field path, e.g. `scorecard.scalemax`, `items.0.prompt`), `code` (short
+ * machine-readable identifier), and `message` (lang string key resolved at
+ * render time by the consumer, not in this helper).
+ *
+ * Validation philosophy (per Phase 6.3 Q17 disposition): permissive on
+ * unknown fields. Required fields must be present and well-typed; unknown
+ * fields produce warnings (informational, not blocking) so future v1.1
+ * exports carrying additional optional fields can still import into v1.0
+ * without errors. Schema_version controls compatibility — at v0.7.0 only
+ * `"1.0"` is recognised; future versions extend acceptance explicitly.
+ *
+ * Cross-band overlap detection is intentionally NOT in scope at this helper.
+ * The source scorecard validated overlap at save time (manage.php Bands tab,
+ * via scorecard_compute_band_coverage); hand-edited JSON misuse cases
+ * surface post-import via the existing manage.php standing overlap check.
+ *
+ * @param array $template Parsed JSON template (json_decode($raw, true) output).
+ * @return array `['errors' => array, 'warnings' => array]` — each inner
+ *               array is a list of `['path' => string, 'code' => string,
+ *               'message' => string]` entries.
+ */
+function scorecard_template_validate(array $template): array {
+    $errors = [];
+    $warnings = [];
+
+    // Top-level envelope: required fields per SPEC §9.6.
+    $envelopefields = ['schema_version', 'plugin', 'exported_at', 'scorecard', 'items', 'bands'];
+    foreach ($envelopefields as $field) {
+        if (!array_key_exists($field, $template)) {
+            $errors[] = [
+                'path' => $field,
+                'code' => 'envelope_missingfield',
+                'message' => 'template:validate:envelope:missingfield',
+            ];
+        }
+    }
+    // Bail early on missing envelope fields — downstream type checks would
+    // crash on null access. Operator gets a clean "fix the envelope first"
+    // message before drowning in cascading nested errors.
+    if (!empty($errors)) {
+        return ['errors' => $errors, 'warnings' => $warnings];
+    }
+
+    // Top-level type checks.
+    $envelopetypes = [
+        'schema_version' => 'string',
+        'plugin' => 'array',
+        'exported_at' => 'string',
+        'scorecard' => 'array',
+        'items' => 'array',
+        'bands' => 'array',
+    ];
+    foreach ($envelopetypes as $field => $expectedtype) {
+        if (!scorecard_template_check_type($template[$field], $expectedtype)) {
+            $errors[] = [
+                'path' => $field,
+                'code' => 'envelope_wrongtype',
+                'message' => 'template:validate:envelope:wrongtype',
+            ];
+        }
+    }
+    if (!empty($errors)) {
+        return ['errors' => $errors, 'warnings' => $warnings];
+    }
+
+    // Permissive on unknown envelope keys: warn (Q17 disposition (b)).
+    foreach (array_keys($template) as $key) {
+        if (!in_array($key, $envelopefields, true)) {
+            $warnings[] = [
+                'path' => $key,
+                'code' => 'unknownfield',
+                'message' => 'template:validate:unknownfield',
+            ];
+        }
+    }
+
+    // Schema version: at v0.7.0 only "1.0" is recognised (Q18 disposition (c)).
+    if ($template['schema_version'] !== '1.0') {
+        $errors[] = [
+            'path' => 'schema_version',
+            'code' => 'schemaversion_unsupported',
+            'message' => 'template:validate:schemaversion:unsupported',
+        ];
+        // Bail — downstream layers assume schema_version semantics.
+        return ['errors' => $errors, 'warnings' => $warnings];
+    }
+
+    // Plugin object: name must match (Q19 fatal); version mismatch warns
+    // (Q20 — warn on any difference; per SPEC §9.6 directive).
+    $plugin = $template['plugin'];
+    if (($plugin['name'] ?? null) !== 'mod_scorecard') {
+        $errors[] = [
+            'path' => 'plugin.name',
+            'code' => 'plugin_wrongname',
+            'message' => 'template:validate:plugin:wrongname',
+        ];
+    }
+    $info = \core_plugin_manager::instance()->get_plugin_info('mod_scorecard');
+    $currentrelease = (string)($info->release ?? '');
+    if (isset($plugin['version']) && (string)$plugin['version'] !== $currentrelease) {
+        $warnings[] = [
+            'path' => 'plugin.version',
+            'code' => 'plugin_versionmismatch',
+            'message' => 'template:validate:plugin:versionmismatch',
+        ];
+    }
+
+    // Exported_at: strict ISO 8601 UTC (Z suffix, no fractional seconds).
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', (string)$template['exported_at'])) {
+        $errors[] = [
+            'path' => 'exported_at',
+            'code' => 'exportedat_invalid',
+            'message' => 'template:validate:exportedat:invalid',
+        ];
+    }
+
+    // Scorecard settings — required fields per SPEC §9.6 whitelist.
+    $scorecardfields = [
+        'name' => 'string',
+        'intro' => 'string',
+        'introformat' => 'int',
+        'scalemin' => 'int',
+        'scalemax' => 'int',
+        'displaystyle' => 'string',
+        'lowlabel' => 'string',
+        'highlabel' => 'string',
+        'allowretakes' => 'int',
+        'showresult' => 'int',
+        'showpercentage' => 'int',
+        'showitemsummary' => 'int',
+        'fallbackmessage' => 'string',
+        'fallbackmessageformat' => 'int',
+        'gradeenabled' => 'int',
+        'grade' => 'int',
+        'completionsubmit' => 'int',
+    ];
+    $scorecardresult = scorecard_template_validate_object(
+        $template['scorecard'],
+        $scorecardfields,
+        'scorecard',
+        'scorecard'
+    );
+    $errors = array_merge($errors, $scorecardresult['errors']);
+    $warnings = array_merge($warnings, $scorecardresult['warnings']);
+
+    // Per-field semantic checks (only if no missing/wrong-type errors above
+    // for the involved fields — array_merge order means errors carry forward).
+    if (
+        scorecard_template_check_type($template['scorecard']['scalemin'] ?? null, 'int') &&
+        scorecard_template_check_type($template['scorecard']['scalemax'] ?? null, 'int')
+    ) {
+        if ((int)$template['scorecard']['scalemin'] >= (int)$template['scorecard']['scalemax']) {
+            $errors[] = [
+                'path' => 'scorecard.scalemax',
+                'code' => 'scorecard_rangeinvalid',
+                'message' => 'template:validate:scorecard:rangeinvalid',
+            ];
+        }
+    }
+    if (
+        scorecard_template_check_type($template['scorecard']['displaystyle'] ?? null, 'string') &&
+        $template['scorecard']['displaystyle'] !== 'radio'
+    ) {
+        $errors[] = [
+            'path' => 'scorecard.displaystyle',
+            'code' => 'scorecard_displaystylelocked',
+            'message' => 'template:validate:scorecard:displaystylelocked',
+        ];
+    }
+
+    // Items — each must satisfy the per-row whitelist.
+    $itemfields = [
+        'prompt' => 'string',
+        'promptformat' => 'int',
+        'lowlabel' => 'string',
+        'highlabel' => 'string',
+        'required' => 'int',
+        'visible' => 'int',
+        'sortorder' => 'int',
+    ];
+    foreach ($template['items'] as $idx => $item) {
+        if (!is_array($item)) {
+            $errors[] = [
+                'path' => "items.{$idx}",
+                'code' => 'item_wrongtype',
+                'message' => 'template:validate:item:wrongtype',
+            ];
+            continue;
+        }
+        $itemresult = scorecard_template_validate_object(
+            $item,
+            $itemfields,
+            "items.{$idx}",
+            'item'
+        );
+        $errors = array_merge($errors, $itemresult['errors']);
+        $warnings = array_merge($warnings, $itemresult['warnings']);
+
+        // Flag value range: required + visible must be 0 or 1.
+        foreach (['required', 'visible'] as $flag) {
+            if (
+                scorecard_template_check_type($item[$flag] ?? null, 'int') &&
+                !in_array((int)$item[$flag], [0, 1], true)
+            ) {
+                $errors[] = [
+                    'path' => "items.{$idx}.{$flag}",
+                    'code' => 'item_flagvalue',
+                    'message' => 'template:validate:item:flagvalue',
+                ];
+            }
+        }
+    }
+
+    // Bands — each must satisfy the per-row whitelist.
+    $bandfields = [
+        'minscore' => 'int',
+        'maxscore' => 'int',
+        'label' => 'string',
+        'message' => 'string',
+        'messageformat' => 'int',
+        'sortorder' => 'int',
+    ];
+    foreach ($template['bands'] as $idx => $band) {
+        if (!is_array($band)) {
+            $errors[] = [
+                'path' => "bands.{$idx}",
+                'code' => 'band_wrongtype',
+                'message' => 'template:validate:band:wrongtype',
+            ];
+            continue;
+        }
+        $bandresult = scorecard_template_validate_object(
+            $band,
+            $bandfields,
+            "bands.{$idx}",
+            'band'
+        );
+        $errors = array_merge($errors, $bandresult['errors']);
+        $warnings = array_merge($warnings, $bandresult['warnings']);
+
+        // Range check: minscore <= maxscore.
+        if (
+            scorecard_template_check_type($band['minscore'] ?? null, 'int') &&
+            scorecard_template_check_type($band['maxscore'] ?? null, 'int') &&
+            (int)$band['minscore'] > (int)$band['maxscore']
+        ) {
+            $errors[] = [
+                'path' => "bands.{$idx}.maxscore",
+                'code' => 'band_rangeinvalid',
+                'message' => 'template:validate:band:rangeinvalid',
+            ];
+        }
+    }
+
+    return ['errors' => $errors, 'warnings' => $warnings];
+}
+
+/**
+ * Validate a single nested object (scorecard / item / band) against a
+ * field-name → expected-type map.
+ *
+ * Internal helper for {@see scorecard_template_validate}. Checks every
+ * required field is present (array_key_exists, not isset — null values must
+ * be rejected as wrong-type, not treated as missing) and well-typed.
+ * Permissive on unknown fields per Q17: extras emit warnings keyed by the
+ * generic `template:validate:unknownfield` lang string.
+ *
+ * @param array $object The object to validate (scorecard, item, or band).
+ * @param array $fields Map of field name => expected type ('int', 'string', 'array').
+ * @param string $pathprefix Dot-separated path prefix for error paths
+ *                            (e.g. "scorecard", "items.3", "bands.0").
+ * @param string $messageprefix Lang string sub-namespace prefix
+ *                               ('scorecard', 'item', 'band').
+ * @return array `['errors' => array, 'warnings' => array]`.
+ */
+function scorecard_template_validate_object(
+    array $object,
+    array $fields,
+    string $pathprefix,
+    string $messageprefix
+): array {
+    $errors = [];
+    $warnings = [];
+
+    foreach ($fields as $field => $expectedtype) {
+        if (!array_key_exists($field, $object)) {
+            $errors[] = [
+                'path' => "{$pathprefix}.{$field}",
+                'code' => "{$messageprefix}_missingfield",
+                'message' => "template:validate:{$messageprefix}:missingfield",
+            ];
+            continue;
+        }
+        if (!scorecard_template_check_type($object[$field], $expectedtype)) {
+            $errors[] = [
+                'path' => "{$pathprefix}.{$field}",
+                'code' => "{$messageprefix}_wrongtype",
+                'message' => "template:validate:{$messageprefix}:wrongtype",
+            ];
+        }
+    }
+
+    foreach (array_keys($object) as $key) {
+        if (!array_key_exists($key, $fields)) {
+            $warnings[] = [
+                'path' => "{$pathprefix}.{$key}",
+                'code' => 'unknownfield',
+                'message' => 'template:validate:unknownfield',
+            ];
+        }
+    }
+
+    return ['errors' => $errors, 'warnings' => $warnings];
+}
+
+/**
+ * Lightweight type predicate for template validation.
+ *
+ * Strict on int — accepts only PHP int, not numeric strings. JSON parsed
+ * via `json_decode($raw, true)` produces native int for unquoted JSON
+ * numbers; templates with `"scalemin": "1"` (string) are hand-edit errors
+ * worth surfacing as wrong-type fatals.
+ *
+ * @param mixed $value The value to check.
+ * @param string $expectedtype One of 'int', 'string', 'array'.
+ * @return bool True if $value matches the expected type.
+ */
+function scorecard_template_check_type($value, string $expectedtype): bool {
+    return match ($expectedtype) {
+        'int' => is_int($value),
+        'string' => is_string($value),
+        'array' => is_array($value),
+        default => false,
+    };
+}
