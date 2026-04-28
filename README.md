@@ -12,13 +12,13 @@ total score plus interpretation.
 
 ## Status
 
-**v0.4.0 — Phase 4 (Reporting) shipped 2026-04-27.** Managers can now
-review submitted attempts in a paginated report with per-attempt
-expandable detail, group filter integration, and CSV export. Phases
-1–3 (skeleton, authoring, learner submission) shipped previously;
-the plugin remains MATURITY_ALPHA — gradebook integration (Phase 5a)
-and full backup/privacy provider (Phase 5b) remain planned, so
-operators relying on grade flow should wait for those releases.
+**v0.5.0 — Phase 5a (Gradebook + completion) shipped 2026-04-27.**
+Scorecard attempts now propagate to the Moodle gradebook with
+latest-attempt-overwrites semantics, and activities support a custom
+"Submit a scorecard attempt" completion rule. Phases 1–4 (skeleton,
+authoring, learner submission, reporting) shipped previously; the
+plugin remains MATURITY_ALPHA — full backup/privacy provider (Phase
+5b) remains planned. Per-tenant theming hooks are deferred to v1.x.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
@@ -26,7 +26,7 @@ operators relying on grade flow should wait for those releases.
 | 2 — Authoring | Manage screen with Items + Bands tabs, CRUD, soft-delete, reorder, band coverage validation, lifecycle gate | shipped v0.2.0 |
 | 3 — Learner submission | Submission form, validation, attempt + response save, scoring engine, band matching with snapshotting, result page, retake callout | **shipped v0.3.0** |
 | 4 — Reporting | Reports tab, expandable detail, CSV export, group-mode awareness, pagination | **shipped v0.4.0** |
-| 5a — Completion + gradebook | Activity completion, gradebook integration, per-tenant theming hooks | planned |
+| 5a — Completion + gradebook | Activity completion via "Submit a scorecard attempt" rule, gradebook integration with latest-attempt overwrites and auto-grademax. Per-tenant theming hooks deferred to v1.x. | **shipped v0.5.0** |
 | 5b — Backup + privacy | Full backup/restore (items, bands, attempts, responses with snapshot fidelity), privacy provider implementation | planned |
 
 ## Installation
@@ -42,7 +42,7 @@ Standard Moodle plugin install:
    ```
 
 3. Confirm install at Site administration > Plugins overview > Activity
-   modules > Scorecard. Expected version: `2026042700`.
+   modules > Scorecard. Expected version: `2026042703`.
 
 Requires Moodle `2024100100` or later (Moodle 4.5+; tested on 5.1.3).
 
@@ -54,7 +54,7 @@ exposes the full settings table:
 - Rating scale: `scalemin`, `scalemax`, anchor labels (low/high)
 - Result behavior: show result, show percentage, show item summary,
   fallback message (pre-populated at activity creation per §4.1.1)
-- Gradebook integration toggle (gradebook write happens in Phase 5a)
+- Gradebook integration toggle (gradebook write shipped in v0.5.0; see [Gradebook integration](#gradebook-integration) below)
 - Standard Moodle activity options (visibility, group mode, etc.)
 
 Item authoring and result-band configuration ship in Phase 2 — see
@@ -236,12 +236,13 @@ Operators wanting full result-blackout should also disable
 
 ### What's not yet in the learner experience
 
-Gradebook integration lands in Phase 5a — submitted attempts compute
-a `totalscore` and store it on the attempt row, but the score isn't
-yet propagated to Moodle's gradebook even when `gradeenabled` is on.
 Multiple-attempt history with per-attempt drill-down lives in the
 manager-only [Reports](#reports) surface; learners themselves see
-only their latest attempt's result.
+only their latest attempt's result. Gradebook propagation
+([Gradebook integration](#gradebook-integration)) and activity
+completion ([Completion](#completion)) shipped in v0.5.0 and surface
+through Moodle's standard gradebook and completion UI rather than
+through scorecard's own pages.
 
 ## Reports
 
@@ -310,6 +311,88 @@ size rather than total attempts.
 
 The initials filter (A–Z) is intentionally disabled.
 
+## Gradebook integration
+
+When the activity-level `gradeenabled` toggle is on, scorecard
+submissions propagate to the Moodle gradebook automatically. The
+toggle defaults to off — most scorecards are self-assessments where
+gradebook integration would be misleading rather than helpful (per
+SPEC §9.2 default).
+
+### Grade method: latest-attempt overwrites
+
+Per SPEC §9.2 (Decision v0.4.2), each submission writes the
+attempt's `totalscore` as the gradebook value for that user,
+replacing any prior entry. Retakes therefore overwrite — the
+gradebook always reflects the learner's most recent submission. This
+matches mod_assign's convention. Highest/first/average grade methods
+are deferred to v1.1+.
+
+### Grade max: explicit or auto-computed
+
+The `grade` activity setting controls grademax. Two modes:
+
+- **Explicit grademax (`grade > 0`).** The set value is grademax
+  directly. Use when the operator wants a fixed scale (e.g., "out of
+  100" regardless of item count).
+- **Auto-grademax (`grade = 0`, the default).** Grademax is computed
+  as visible-item count × scalemax. Recomputes automatically on item
+  add, remove, or visibility-toggle **while no attempts exist** (SPEC
+  §9.2 lifecycle gate). After the first submission, grademax freezes
+  to keep historical scoring stable (SPEC §11.2 snapshot rule applied
+  to the grade item as well as the attempt row).
+
+### Toggle behavior
+
+Toggling `gradeenabled` from on to off sets the grade item's
+gradetype to `GRADE_TYPE_NONE` rather than deleting it — the grade
+column disappears from the gradebook view, but the underlying grade
+history is preserved. Toggling back on reactivates with the current
+`grade` value as grademax. Operators who toggle do not lose prior
+gradebook entries.
+
+Deleting the scorecard activity removes the grade item entirely.
+
+## Completion
+
+Scorecard activities support custom completion via the "Submit a
+scorecard attempt" rule (per SPEC §9.3). When enabled, the activity
+is marked complete for a user as soon as they have at least one
+submitted attempt.
+
+### One-way latch semantics
+
+Completion is a one-way latch: any submission, ever, satisfies the
+rule. Soft-deleted items, band edits, and similar mutations after
+the submission do not un-complete a prior attempt. Retakes do not
+change the completion state — the user remains "complete" because
+they have submitted at least once.
+
+### Default behavior
+
+New scorecards default to `completionsubmit=1` in the activity edit
+form (the form-level default). The natural completion criterion for
+a self-assessment is "they submitted," so making this the friendly
+default reduces operator setup friction.
+
+Existing scorecards from v0.4.x default to `completionsubmit=0` on
+upgrade (the schema floor). Operators see the new "Submit a
+scorecard attempt" checkbox in the activity edit form and explicitly
+opt in for existing scorecards. Asymmetric defaults reflect
+asymmetric deployment-state assumptions: new scorecards get the
+operator-friendly default, existing scorecards preserve prior
+completion behavior.
+
+### Integration with Moodle activity completion
+
+The scorecard's completion rule integrates with Moodle's standard
+activity completion UI: course-level completion criteria can include
+"this scorecard is complete," completion reports show the rule
+state, and the activity's standard "Done" checkmark appears on the
+course page. View tracking (`FEATURE_COMPLETION_TRACKS_VIEWS`) is
+also enabled — operators can require "view + submit" completion if
+they configure both rules.
+
 ## Running tests
 
 PHPUnit init (one-time per Moodle instance):
@@ -358,9 +441,12 @@ ddev exec bash -c '~/.composer/vendor/bin/phpcs --standard=moodle /var/www/html/
 ## Per-tenant theming
 
 CSS custom properties (`--scorecard-*`) are reserved in `docs/SPEC.md`
-§10. Phase 5a ships `styles.css` with the actual properties and
-sensible Boost-compatible defaults. Tenant themes override the
-`--scorecard-*` values without modifying plugin files.
+§10 for per-tenant brand color overrides. The actual properties and
+Boost-compatible defaults are deferred to **v1.x** — they were
+originally scoped with Phase 5a but pulled out to keep that phase
+focused on gradebook + completion. Tenant themes that want
+mod_scorecard brand alignment before v1.x can override scorecard's
+existing class selectors directly via theme SCSS as a stop-gap.
 
 ## Roadmap
 
@@ -377,8 +463,10 @@ export, AI-assisted item generation).
 - **LMS Light portable lessons:** [`lms-light-docs/LESSONS.md`](https://github.com/jport500/lms-light-docs/blob/main/LESSONS.md)
   — process patterns and failure modes accumulated across plugin work.
 - **Specification:** [`docs/SPEC.md`](docs/SPEC.md) — current plugin
-  specification (v0.4, unchanged through v0.4.0; sha256-verified
-  against the canonical raw URL on commit).
+  specification (v0.4.2, unchanged through v0.5.0; sha256-verified
+  against the canonical raw URL on commit). The 0.4 → 0.4.1 → 0.4.2
+  sub-decimal bumps reflect §9.1 capability matrix corrections (Phase 1
+  hotfix) and the §9.2 grade-method clarification (Phase 5a.0).
 - **Release notes:** [`CHANGES.md`](CHANGES.md).
 
 ## License

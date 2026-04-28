@@ -1,5 +1,144 @@
 # mod_scorecard release notes
 
+## v0.5.0 — Phase 5a (Gradebook and completion) (2026-04-27)
+
+**MATURITY_ALPHA. Gradebook integration and activity completion are
+now usable end-to-end; full backup/privacy provider (Phase 5b) and
+per-tenant theming hooks (deferred to v1.x) remain planned.** This
+release ships gradebook integration with latest-attempt-overwrites
+semantics, auto-grademax computation from visible items, completion
+via the new "Submit a scorecard attempt" rule, and an upgrade path
+that preserves prior behavior for existing deployments.
+
+### Shipped
+
+**Gradebook integration.** Scorecard submissions propagate to the
+Moodle gradebook for activities with `gradeenabled` set. The grade
+method per SPEC §9.2 (Decision v0.4.2) is latest-attempt overwrites:
+each submission writes the attempt's `totalscore` as the gradebook
+value for that user, replacing any prior entry. Highest, first, and
+average grade methods remain v1.1+ scope.
+
+**Auto-grademax computation.** When a scorecard's `grade` setting is
+0 (auto mode, the default), grademax derives from visible-item
+count × `scalemax`. Recomputes automatically on item add, remove, or
+visibility-toggle while no attempts exist (SPEC §9.2 lifecycle
+gate); freezes after the first submission per SPEC §11.2's
+snapshot-stability rule applied to grade items. When `grade` is
+explicit (greater than zero), that value becomes grademax directly
+and does not auto-recompute.
+
+**Items-CRUD lifecycle integration.** Item add, update (visibility
+toggle), and hard-delete operations recompute grademax via a gated
+helper. The gate uses a direct DB count rather than the cached
+attempt counter so the recompute callsites do not prime the cache
+and surprise subsequent callers in the same request. The soft-delete
+branch (when attempts exist) preserves the frozen grademax.
+
+**Completion via "Submit a scorecard attempt" rule.** New custom
+completion rule (`completionsubmit`) marks the activity complete for
+a user when they have at least one submitted attempt. One-way latch:
+any submission, ever, satisfies the rule. Soft-deleted items, band
+edits, and similar mutations do not un-complete a prior submission;
+retakes do not change the completion state.
+
+**Submit-time hooks.** The submission handler propagates both grade
+and completion state immediately on attempt persistence, after the
+event triggers. Idempotent on retake — each submission overwrites
+the gradebook entry; completion stays "complete" once set.
+
+**Schema migration.** New `completionsubmit` column added to
+`mdl_scorecard` via savepoint at `2026042701`. New scorecards default
+to 1 in the activity edit form (operator-friendly: the natural
+completion criterion for a self-assessment is "they submitted").
+Existing scorecards default to 0 (the schema floor); operators see
+the new checkbox in the edit form and explicitly opt in. Asymmetric
+defaults reflect asymmetric deployment-state assumptions.
+
+**Custom completion class.**
+`\mod_scorecard\completion\custom_completion` exposes the
+completionsubmit rule via Moodle 5.x's `activity_custom_completion`
+API for completion reports, course-level completion criteria, and
+standard Moodle completion UI integration. `FEATURE_COMPLETION_TRACKS_VIEWS`
+also enabled, so the activity supports the standard view-tracking
+completion option in addition to the custom rule.
+
+**Toggle resilience.** Setting `gradeenabled` from on to off updates
+the grade item to `GRADE_TYPE_NONE` rather than deleting it, so
+toggling back on preserves the gradebook history. Deleting the
+scorecard activity removes the grade item entirely (no orphan
+columns in the gradebook).
+
+**SPEC clarification (v0.4.2).** SPEC §9.2 grade-method directive
+made explicit (Decision v0.4.2): latest-attempt overwrites; other
+methods deferred to v1.1+. SPEC sha bumped from 0.4.1 to 0.4.2 in
+sub-step 5a.0.
+
+### Operator action
+
+**Standard upgrade path.** Run `php admin/cli/upgrade.php` (or
+trigger the admin UI upgrade prompt). The upgrade applies the schema
+change (new `completionsubmit` column on `mdl_scorecard`) at
+savepoint `2026042701` and advances the version stamp through
+`2026042703`.
+
+**Lifecycle-hook fallback for v0.4.x deployments with `gradeenabled=1`
+scorecards.** If your deployment has scorecards with `gradeenabled=1`
+that already had attempts before this upgrade, edit and save those
+activities once post-upgrade to populate gradebook entries from
+existing attempts. New scorecards from v0.5.0 onward have grade
+items created automatically on save. No action is needed for typical
+v0.4.x deployments where `gradeenabled` was unused (the default).
+
+**No completion-state surprises on upgrade.** Existing v0.4.x
+scorecards have `completionsubmit=0` (the schema floor) — no
+scorecard auto-completes until the operator explicitly enables the
+rule via the activity edit form. Per-instance opt-in preserves prior
+completion behavior on upgrade.
+
+### Quality gates
+
+- `phpcs --standard=moodle` clean plugin-wide (0 errors / 0 warnings).
+- 143 PHPUnit tests / 612 assertions across the plugin suite.
+- Manual UI walkthrough at every Phase 5a sub-step gate (5a.1
+  through 5a.5 plus the 5a.5 fix-forward) covering paths PHPUnit
+  cannot easily exercise: gradeenabled toggle UX, grade column
+  appearance per per-instance gating, latest-attempt overwrite
+  semantics on retake, completion checkmark appearance on submit,
+  soft-delete branch preservation post-attempt, and empirical
+  schema upgrade application in DDEV.
+
+### Spec status
+
+`docs/SPEC.md` is at v0.4.2 (sha256
+`c1ac688608724bf585299e9e2a556947b7608f1ba52a790a19ca2eb6ba903010`).
+The 0.4.1 → 0.4.2 sub-decimal bump in sub-step 5a.0 made the §9.2
+grade-method directive explicit (Decision v0.4.2: latest-attempt
+overwrites; highest, first, and average deferred to v1.1+). SPEC
+sha pinned through the remaining Phase 5a sub-steps.
+
+### Followups carried forward
+
+All v0.4.0 followups still apply (Phase 5b prerequisites,
+soft-delete restore, out-of-theoretical-range bands, doc cleanup).
+**18 active items** going into Phase 5b.
+
+Deferred to v1.x explicitly (per Phase 5a kickoff scope decisions
+and this release's outcome):
+
+- **Per-tenant theming hooks** — CSS custom properties for
+  per-tenant brand color overrides. Originally scoped with Phase
+  5a; pulled to v1.x to keep this phase focused on gradebook and
+  completion.
+- **Highest, first, and average grade methods** — alternatives to
+  latest-attempt overwrites (per SPEC §9.2 Decision v0.4.2).
+- **Cron-deferred bulk grade backfill** — adhoc task
+  (`\mod_scorecard\task\backfill_grades`) for deployments with
+  substantial pre-v0.5.0 attempt history. Not needed at LMS Light's
+  current pre-launch deployment scale; v0.6+ revisit if scaling
+  demands automated propagation rather than per-activity operator
+  remediation.
+
 ## v0.4.0 — Phase 4 (Reporting) (2026-04-27)
 
 **MATURITY_ALPHA. Manager-facing reports surface is now usable
