@@ -12,22 +12,24 @@ total score plus interpretation.
 
 ## Status
 
-**v0.5.0 — Phase 5a (Gradebook + completion) shipped 2026-04-27.**
-Scorecard attempts now propagate to the Moodle gradebook with
-latest-attempt-overwrites semantics, and activities support a custom
-"Submit a scorecard attempt" completion rule. Phases 1–4 (skeleton,
-authoring, learner submission, reporting) shipped previously; the
-plugin remains MATURITY_ALPHA — full backup/privacy provider (Phase
-5b) remains planned. Per-tenant theming hooks are deferred to v1.x.
+**v0.6.0 — Phase 5b (Privacy and backup/restore) shipped 2026-04-28.**
+Scorecard activities now round-trip through Moodle's standard backup
+wizard (items, bands, and — when "Include user data" is on — attempts
+and responses with attempt-side snapshots preserved verbatim), and
+the privacy provider supports operator-driven export and deletion of
+learner submission data via Moodle's standard Privacy and policies
+tooling. Phases 1–5a shipped previously; the plugin remains
+MATURITY_ALPHA pending earned-by-production-usage signal. Per-tenant
+theming hooks are deferred to v1.x.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 1 — Skeleton | Install schema, capabilities, mod_form, view, privacy provider scaffold, settings-only backup/restore, skeleton tests | shipped v0.1.0 |
 | 2 — Authoring | Manage screen with Items + Bands tabs, CRUD, soft-delete, reorder, band coverage validation, lifecycle gate | shipped v0.2.0 |
-| 3 — Learner submission | Submission form, validation, attempt + response save, scoring engine, band matching with snapshotting, result page, retake callout | **shipped v0.3.0** |
-| 4 — Reporting | Reports tab, expandable detail, CSV export, group-mode awareness, pagination | **shipped v0.4.0** |
-| 5a — Completion + gradebook | Activity completion via "Submit a scorecard attempt" rule, gradebook integration with latest-attempt overwrites and auto-grademax. Per-tenant theming hooks deferred to v1.x. | **shipped v0.5.0** |
-| 5b — Backup + privacy | Full backup/restore (items, bands, attempts, responses with snapshot fidelity), privacy provider implementation | planned |
+| 3 — Learner submission | Submission form, validation, attempt + response save, scoring engine, band matching with snapshotting, result page, retake callout | shipped v0.3.0 |
+| 4 — Reporting | Reports tab, expandable detail, CSV export, group-mode awareness, pagination | shipped v0.4.0 |
+| 5a — Completion + gradebook | Activity completion via "Submit a scorecard attempt" rule, gradebook integration with latest-attempt overwrites and auto-grademax. Per-tenant theming hooks deferred to v1.x. | shipped v0.5.0 |
+| 5b — Backup + privacy | Full backup/restore (items, bands, attempts, responses with snapshot fidelity), privacy provider implementation | **shipped v0.6.0** |
 
 ## Installation
 
@@ -42,7 +44,7 @@ Standard Moodle plugin install:
    ```
 
 3. Confirm install at Site administration > Plugins overview > Activity
-   modules > Scorecard. Expected version: `2026042703`.
+   modules > Scorecard. Expected version: `2026042704`.
 
 Requires Moodle `2024100100` or later (Moodle 4.5+; tested on 5.1.3).
 
@@ -393,6 +395,108 @@ course page. View tracking (`FEATURE_COMPLETION_TRACKS_VIEWS`) is
 also enabled — operators can require "view + submit" completion if
 they configure both rules.
 
+## Privacy
+
+The scorecard plugin implements Moodle's Privacy API (per SPEC §9.5)
+so operators can fulfil data-subject requests through Moodle's
+standard tooling at **Site administration > Users > Privacy and
+policies**. Prior to v0.6.0 the plugin held only a privacy provider
+scaffold; v0.6.0 ships the full export and deletion implementation.
+
+### What user data the plugin holds
+
+Per-user submission data lives on `mdl_scorecard_attempts` (one row
+per attempt: score trio, matched-band snapshot, timestamps) and
+`mdl_scorecard_responses` (one row per item per attempt: the response
+value, joined to the attempt and the item). Items, bands, and the
+scorecard activity itself are author-defined content, not user data.
+
+### Export
+
+Running Moodle's standard data export for a user produces a record
+per scorecard activity per attempt, including:
+
+- The score trio (`totalscore`, `maxscore`, `percentage`) as
+  recorded at submit time.
+- The matched band's label and message at submit time, captured as
+  snapshot fields (so a band edited or deleted afterwards never
+  shifts what the export shows).
+- Each per-item response paired with the prompt the learner saw.
+  Items soft-deleted between submit and export render with a
+  "(deleted item)" marker on the prompt — the response value is
+  still included so the historical record stays complete.
+
+### Deletion
+
+Three deletion scopes are supported via Moodle's standard Privacy
+tooling:
+
+- **Delete data for a context** — removes all attempts and responses
+  for a single scorecard activity. Use when wiping a course's
+  submission history while keeping the activity structure available.
+- **Delete data for a list of users in a context** — removes the
+  named users' submissions for that activity; other learners' data
+  is untouched.
+- **Delete data for a single user across all contexts** — removes
+  that learner's data from every scorecard activity they have
+  submitted (right-to-be-forgotten compliance).
+
+Items, bands, and scorecard activities themselves are never removed
+by these flows — only user-submitted data. Privacy deletion does not
+touch gradebook entries; operators wanting to also clear gradebook
+history should run Moodle's standard gradebook delete alongside.
+
+## Backup and restore
+
+Scorecard activities round-trip through Moodle's standard backup
+wizard. Backup creates an `.mbz` archive containing the activity
+structure (settings, items, bands) and — when "Include user data" is
+on — the user submission data (attempts and responses). Restore
+reconstructs the activity in a destination course with the same
+structure and any included user data.
+
+### What's always backed up
+
+- Activity settings (scale, anchor labels, allow retakes, show
+  result, gradebook integration, completion settings, fallback
+  message).
+- All items, including soft-deleted ones. The `deleted=1` flag
+  round-trips so historical attempt detail (Reports) can still
+  resolve the original prompt text post-restore.
+- All result bands, including soft-deleted ones. Same reason — band
+  labels and messages on historical attempts must remain resolvable.
+
+### What's included only with user data
+
+- All scorecard attempts (one row per learner per attempt).
+- All scorecard responses (one row per item per attempt).
+
+### Snapshot fidelity
+
+Each attempt row stores the matched band's label, message, and
+message format **as captured at submit time**. These snapshot fields
+preserve verbatim through backup and restore — historical attempts
+always show the band as the learner saw it at submission, regardless
+of any band edits applied afterwards. The plugin does not recompute
+band labels or messages from current band state at restore.
+
+### Restore behavior
+
+When you restore a scorecard activity to a different course, or to
+the same course as a duplicate, Moodle assigns new internal IDs to
+the restored items, bands, and attempts. The plugin remaps
+cross-references automatically — restored attempts reference the
+restored bands; restored responses reference the restored items.
+The remapping is invisible to operators: the wizard shows a normal
+restore flow, and the activity behaves identically in the
+destination course.
+
+Restoring with "Include user data" off produces an activity with
+the full authoring structure (items, bands, settings) but no
+attempts or responses — useful when duplicating a scorecard
+template to a new course without bringing learner submission
+history along.
+
 ## Running tests
 
 PHPUnit init (one-time per Moodle instance):
@@ -405,16 +509,23 @@ Run the full mod_scorecard suite via explicit file list:
 
 ```
 ddev exec bash -c 'cd /var/www/html/moodle && vendor/bin/phpunit \
-    public/mod/scorecard/tests/lib_test.php \
+    public/mod/scorecard/tests/access_test.php \
     public/mod/scorecard/tests/db_install_test.php \
-    public/mod/scorecard/tests/locallib_test.php \
-    public/mod/scorecard/tests/locallib_band_test.php \
-    public/mod/scorecard/tests/locallib_band_coverage_test.php \
-    public/mod/scorecard/tests/lifecycle_test.php \
+    public/mod/scorecard/tests/export_test.php \
+    public/mod/scorecard/tests/grade_test.php \
     public/mod/scorecard/tests/learner_render_test.php \
+    public/mod/scorecard/tests/lib_test.php \
+    public/mod/scorecard/tests/lifecycle_test.php \
+    public/mod/scorecard/tests/locallib_band_coverage_test.php \
+    public/mod/scorecard/tests/locallib_band_test.php \
+    public/mod/scorecard/tests/locallib_test.php \
+    public/mod/scorecard/tests/report_test.php \
+    public/mod/scorecard/tests/result_render_test.php \
     public/mod/scorecard/tests/scoring_test.php \
     public/mod/scorecard/tests/submission_test.php \
-    public/mod/scorecard/tests/result_render_test.php'
+    public/mod/scorecard/tests/privacy/provider_test.php \
+    public/mod/scorecard/tests/backup/backup_test.php \
+    public/mod/scorecard/tests/backup/restore_test.php'
 ```
 
 Or run an individual test file:
@@ -463,10 +574,13 @@ export, AI-assisted item generation).
 - **LMS Light portable lessons:** [`lms-light-docs/LESSONS.md`](https://github.com/jport500/lms-light-docs/blob/main/LESSONS.md)
   — process patterns and failure modes accumulated across plugin work.
 - **Specification:** [`docs/SPEC.md`](docs/SPEC.md) — current plugin
-  specification (v0.4.2, unchanged through v0.5.0; sha256-verified
+  specification (v0.4.2, unchanged through v0.6.0; sha256-verified
   against the canonical raw URL on commit). The 0.4 → 0.4.1 → 0.4.2
   sub-decimal bumps reflect §9.1 capability matrix corrections (Phase 1
-  hotfix) and the §9.2 grade-method clarification (Phase 5a.0).
+  hotfix) and the §9.2 grade-method clarification (Phase 5a.0). Phase
+  5b shipped without a SPEC bump — §9.4 (Backup and Restore) and §9.5
+  (Privacy API) directives at v0.4.2 were sharp enough to drive
+  implementation directly.
 - **Release notes:** [`CHANGES.md`](CHANGES.md).
 
 ## License

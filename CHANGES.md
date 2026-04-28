@@ -1,5 +1,169 @@
 # mod_scorecard release notes
 
+## v0.6.0 — Phase 5b (Privacy and backup/restore) (2026-04-28)
+
+**MATURITY_ALPHA. Privacy provider, backup, and restore are now
+usable end-to-end; per-tenant theming hooks (deferred to v1.x) and
+alternative grade methods (deferred to v1.1+) remain.** This release
+ships the Moodle Privacy API provider with full export and delete
+support, the backup-side serialization for items, bands, attempts,
+and responses (with userdata gating), and the restore-side processors
+with full ID remapping for in-plugin cross-references.
+
+### Shipped
+
+**Privacy provider — export.** When an operator runs Moodle's
+standard data export for a user, the scorecard plugin contributes one
+record per attempt across every scorecard activity the user has
+submitted. Each record includes the score trio (`totalscore`,
+`maxscore`, `percentage`), the matched band's label and message at
+submit time (snapshotted), and the per-item response values paired
+with the item prompts. Soft-deleted items render with a
+"(deleted item)" marker so the export remains complete even when
+items have been removed since the user submitted.
+
+**Privacy provider — deletion.** Three scopes supported per Moodle
+convention: delete all user data for an activity context (operator
+wipes a course's submission history while keeping the activity
+structure), delete a list of users' data for an activity (named users
+removed; others preserved), delete a single user's data across all
+contexts (right-to-be-forgotten compliance). Items, bands, and the
+scorecard activity itself are never removed by these flows — only
+user-submitted data.
+
+**Privacy metadata completeness fix.** `scorecard_responses` metadata
+declaration extended with `itemid` (was missing in v0.5.0 — the
+graph-traversal link from response to item is required for export to
+resolve which prompt a response value answered). Cross-table
+soft-delete handling: responses to soft-deleted items round-trip
+through export with the prompt text still resolvable.
+
+**Backup steps for items + bands.** Full nested backup elements for
+`scorecard_items` and `scorecard_bands` as part of the always-backed-
+up authoring structure. Soft-deleted items + bands round-trip with
+their `deleted=1` flag preserved (per SPEC §9.4 — historical
+reporting requires the original prompt and label text to remain
+resolvable post-restore).
+
+**Backup root-element completionsubmit fix.** The `completionsubmit`
+column added to `mdl_scorecard` at savepoint `2026042701` was missing
+from the backup root-element field list in v0.5.0 — scorecards
+backed up with `completionsubmit=1` reverted to the schema floor (0)
+on restore. v0.6.0 restores the field; existing scorecards retain
+their setting through subsequent backup/restore cycles.
+
+**Backup steps for attempts + responses (userdata-gated).** When
+"Include user data" is on in the backup wizard, `scorecard_attempts`
+and `scorecard_responses` serialize with all snapshot fields
+preserved verbatim per SPEC §11.2 — `bandlabelsnapshot`,
+`bandmessagesnapshot`, `bandmessageformatsnapshot`, `totalscore`,
+`maxscore`, `percentage`. Restore re-creates these rows without
+recomputing from current band state, so historical attempts always
+reflect what the learner saw at submit time.
+
+**Restore steps for full nested structure.** Restore-side processors
+for items, bands, attempts, and responses, with full ID remapping for
+in-plugin cross-references. Restored attempts reference the restored
+bands (not the source backup's band IDs); restored responses
+reference the restored items. The remapping is invisible to
+operators — the wizard shows a normal restore flow; the activity
+behaves identically in the destination course.
+
+### Operator action
+
+**Standard upgrade path.** Run `php admin/cli/upgrade.php
+--non-interactive` (or trigger the admin UI upgrade prompt). Phase 5b
+ships no schema changes — privacy + backup + restore are pure code
+additions. The upgrade is stamp-only, advancing the version stamp
+from `2026042703` to `2026042704`.
+
+**Privacy: data subject requests now honor scorecard data.** Existing
+GDPR / right-to-be-forgotten / data-export workflows continue
+unchanged — operators run them through Moodle's standard Privacy
+tooling at **Site administration > Users > Privacy and policies**.
+Prior to v0.6.0, scorecard data was not included in these flows (the
+provider scaffold from Phase 1 declared metadata only); v0.6.0 ships
+the full provider implementation.
+
+**Backup/restore: standard Moodle backup wizard fully supports
+scorecard activities.** Course backup, activity backup, and restore
+into new or existing course all round-trip scorecard data correctly.
+No operator-specific configuration required — the wizard's "Include
+user data" checkbox controls whether attempts and responses come
+along; structure-only restore (items + bands without attempts) works
+as a duplication path for scorecard templates.
+
+**No completion or gradebook surprises on upgrade.** Phase 5b adds
+no schema changes; existing scorecards' configuration and stored
+data are preserved exactly as they were at v0.5.0.
+
+### Quality gates
+
+- `phpcs --standard=moodle` clean plugin-wide (0 errors / 0 warnings).
+- **168 PHPUnit tests / 728 assertions** across the plugin suite (up
+  from 143/612 at v0.5.0 — Phase 5b added +25 tests / +116
+  assertions for privacy provider coverage, backup XML structure +
+  userdata gating, and full backup→restore round-trip with snapshot
+  fidelity and ID remapping verification).
+- Empirical CLI verification at every Phase 5b sub-step gate
+  exercised production code paths against real dev-DB data: privacy
+  export contract, privacy delete contract with transactional
+  rollback, backup XML inspection of items + bands, two-invocation
+  backup comparison for userdata gating, and full backup→restore
+  round-trip with state-comparison assertions across the dev-DB
+  scorecard's 33 attempts and 164 responses.
+
+### Spec status
+
+`docs/SPEC.md` is at v0.4.2 (sha256
+`c1ac688608724bf585299e9e2a556947b7608f1ba52a790a19ca2eb6ba903010`),
+unchanged through v0.6.0. Phase 5b shipped without a SPEC bump
+because §9.4 (Backup and Restore) and §9.5 (Privacy API) directives
+at v0.4.2 were sharp enough to drive implementation directly.
+
+**MATURITY_ALPHA preserved — technical prerequisites met but BETA
+deferred to earned-by-production-usage.** Phase 5b's full delivery
+(privacy + backup + restore) was the gating *technical* prerequisite
+for MATURITY_BETA consideration. The technical case is met; the
+operational case requires production usage. BETA is therefore
+deferred to an earned-by-production-usage trigger rather than a
+phase-completion trigger — the Phase 5b retrospective will name
+explicit BETA criteria (production deployment count, operator-
+reported issue resolution, stable-operation duration). Operators
+evaluating mod_scorecard for adventurous early adoption can expect
+ALPHA behavior at v0.6.0; BETA bump anticipated at a future
+deliberate release decision.
+
+### Followups carried forward
+
+Phase 5b prerequisites from the v0.5.0 followup list are now closed
+(privacy + backup + restore shipped). The remaining v0.5.0 followups
+still apply:
+
+- **Soft-delete restore** — operator path to reverse soft-deletion on
+  items and bands. Currently soft-delete is one-way; operators
+  needing to restore a soft-deleted item must duplicate via DB.
+- **Out-of-theoretical-range bands** — SPEC §4.3 quirk handling for
+  band ranges that extend beyond the activity's possible score
+  envelope. Bands save successfully but never match; warning
+  presentation is a v1.x consideration.
+- **Doc cleanup** — general documentation review across SPEC, README,
+  and inline docblocks. Defensive cleanup; not behavior-changing.
+
+Deferred to v1.x explicitly:
+
+- **Per-tenant theming hooks** — CSS custom properties for per-tenant
+  brand color overrides. Originally scoped with Phase 5a; pulled to
+  v1.x to keep that phase focused on gradebook + completion;
+  Phase 5b's scope was too narrow to bring it back in.
+- **Highest, first, and average grade methods** — alternatives to
+  latest-attempt overwrites (per SPEC §9.2 Decision v0.4.2).
+- **Cron-deferred bulk grade backfill** — adhoc task for deployments
+  with substantial pre-v0.5.0 attempt history. Not needed at LMS
+  Light's current pre-launch deployment scale; v0.7+ revisit if
+  scaling demands automated propagation rather than per-activity
+  operator remediation.
+
 ## v0.5.0 — Phase 5a (Gradebook and completion) (2026-04-27)
 
 **MATURITY_ALPHA. Gradebook integration and activity completion are
