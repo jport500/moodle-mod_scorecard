@@ -113,31 +113,39 @@ function xmldb_scorecard_upgrade(int $oldversion): bool {
     }
 
     if ($oldversion < 2026042702) {
-        // Phase 5a.5 backfill: propagate scores from existing v0.4.x attempts
-        // to the gradebook for any scorecard with gradeenabled=1. The
-        // lifecycle hook in scorecard_add_instance (Phase 5a.1) creates grade
-        // items for new and edited scorecards from v0.5.0 onward, but
-        // pre-existing scorecards with attempts persisted before this upgrade
-        // have no grade items yet. This savepoint creates them.
+        // Phase 5a.5 originally attempted a synchronous backfill iteration
+        // here (per the kickoff Q4 disposition: immediate over cron-deferred,
+        // justified by LMS Light's small deployment scale). The body would
+        // iterate scorecards with gradeenabled=1 and call
+        // scorecard_update_grades on each, propagating existing v0.4.x
+        // attempts to gradebook entries.
         //
-        // Idempotent on re-run: scorecard_update_grades calls grade_update
-        // which overwrites existing entries with the same values; if the
-        // savepoint is interrupted and resumed, scorecards already processed
-        // converge on the same end state without divergence.
+        // That approach is technically infeasible in Moodle 5.x. Moodle's
+        // grade_update internally calls grade_item->is_locked, which calls
+        // course_module_instance_pending_deletion, which calls
+        // get_fast_modinfo, which calls upgrade_ensure_not_running and
+        // throws "cannot be executed during upgrade" when invoked from a
+        // savepoint context. PHPUnit upgrade-path tests do not replicate
+        // this guard and so passed against the broken implementation; the
+        // failure surfaced only when the upgrade was applied in DDEV.
         //
-        // Synchronous backfill is safe at LMS Light's current deployment
-        // scale (two pre-launch customers, near-zero existing attempt
-        // history). Operators with substantial attempt history may experience
-        // longer upgrade times; cron-deferred backfill is a v0.6+ revisit if
-        // scaling demands. See CHANGES.md v0.5.0 ### Operator action for the
-        // operator-facing narrative.
-        require_once($CFG->dirroot . '/mod/scorecard/lib.php');
-
-        $scorecards = $DB->get_records('scorecard', ['gradeenabled' => 1]);
-        foreach ($scorecards as $scorecard) {
-            scorecard_update_grades($scorecard);
-        }
-
+        // The fallback path is lifecycle hooks: scorecard_update_instance
+        // from Phase 5a.1 calls scorecard_update_grades whenever an
+        // operator edits and saves a scorecard, which creates the grade
+        // item and propagates user grades. For the typical v0.4.x
+        // deployment, gradeenabled defaulted to 0 and was an unused toggle
+        // pre-5a.1, so the lifecycle-hook fallback covers the realistic
+        // upgrade scenarios. Rare deployments with gradeenabled=1
+        // scorecards from v0.4.x require operator remediation (edit + save
+        // the affected activity once post-upgrade); see CHANGES.md v0.5.0
+        // ### Operator action for the operator-facing narrative.
+        //
+        // v1.x revisit candidate: a cron-deferred adhoc task
+        // (\mod_scorecard\task\backfill_grades) queued during upgrade and
+        // run by the next cron tick, which would execute scorecard_update_grades
+        // outside upgrade context. Worth implementing if customer scale
+        // demands automated propagation rather than per-activity operator
+        // remediation.
         upgrade_mod_savepoint(true, 2026042702, 'scorecard');
     }
 
