@@ -683,4 +683,103 @@ final class grade_test extends \advanced_testcase {
             'Activity should not be auto-completed when completionsubmit=0.'
         );
     }
+
+    /**
+     * Phase 5a.5 backfill upgrade-path test.
+     *
+     * Simulates a v0.4.x deployment: scorecard with gradeenabled=1, items,
+     * and attempts exist, but NO grade item (because gradebook integration
+     * didn't exist before v0.5.0). The savepoint at 2026042702 iterates
+     * eligible scorecards and calls scorecard_update_grades, which creates
+     * the grade item and populates user grades from existing attempts.
+     *
+     * Direct DB delete of any auto-created grade item (from
+     * scorecard_add_instance's Phase 5a.1 hook) is the cleanest fixture for
+     * the v0.4.x baseline — explicit about what's being simulated, no
+     * fixture gymnastics around bypassing lib.php hooks.
+     */
+    public function test_backfill_propagates_existing_attempts_to_gradebook(): void {
+        global $CFG, $DB;
+        require_once($CFG->libdir . '/upgradelib.php');
+        require_once($CFG->dirroot . '/mod/scorecard/db/upgrade.php');
+
+        $this->resetAfterTest();
+
+        $scorecard = $this->make_scorecard([
+            'gradeenabled' => 1,
+            'grade' => 10,
+            'scalemin' => 1,
+            'scalemax' => 10,
+        ]);
+
+        // Simulate v0.4.x baseline: delete the grade item that
+        // scorecard_add_instance auto-created in 5a.1 so the backfill has
+        // a missing-grade-item to create.
+        $DB->delete_records('grade_items', [
+            'itemtype' => 'mod',
+            'itemmodule' => 'scorecard',
+            'iteminstance' => (int)$scorecard->id,
+        ]);
+
+        $this->add_visible_item((int)$scorecard->id);
+        $user1 = $this->getDataGenerator()->create_user();
+        $user2 = $this->getDataGenerator()->create_user();
+        $this->add_attempt((int)$scorecard->id, (int)$user1->id, 7);
+        $this->add_attempt((int)$scorecard->id, (int)$user2->id, 9);
+
+        // Pre-backfill: no grade item.
+        $existing = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'scorecard',
+            'iteminstance' => (int)$scorecard->id,
+            'courseid' => (int)$scorecard->course,
+        ]);
+        $this->assertFalse(
+            $existing,
+            'Pre-backfill: grade item should not exist (v0.4.x baseline).'
+        );
+
+        // Rewind the recorded plugin version to the pre-5a.5 stamp so
+        // upgrade_mod_savepoint can advance it forward to 2026042702.
+        // Without this, the savepoint call raises a downgrade_exception
+        // because the DB-recorded version equals the savepoint target.
+        // Pattern lifted from tests/access_test.php's Phase 1 upgrade-path
+        // tests (commit 946d09b).
+        set_config('version', 2026042701, 'mod_scorecard');
+
+        // Run the backfill savepoint. Passing 2026042701 means only the
+        // 5a.5 block (oldversion < 2026042702) runs; earlier savepoints
+        // are skipped by their own version comparisons.
+        xmldb_scorecard_upgrade(2026042701);
+
+        // Post-backfill: grade item exists with the right shape.
+        $this->assert_scorecard_grade_item($scorecard, [
+            'gradetype' => GRADE_TYPE_VALUE,
+            'grademax' => 10.0,
+        ]);
+
+        // Both users have their attempt's totalscore propagated. Direct
+        // grade_grades query bypasses grade_get_grades — that helper
+        // triggers a course-cache rebuild path that Moodle blocks while
+        // upgrade mode is active (residual flag from upgrade_mod_savepoint).
+        // grade_item::fetch and direct DB queries are safe in that state.
+        $gradeitem = \grade_item::fetch([
+            'itemtype' => 'mod',
+            'itemmodule' => 'scorecard',
+            'iteminstance' => (int)$scorecard->id,
+            'courseid' => (int)$scorecard->course,
+        ]);
+        $grade1 = $DB->get_record(
+            'grade_grades',
+            ['itemid' => $gradeitem->id, 'userid' => (int)$user1->id]
+        );
+        $grade2 = $DB->get_record(
+            'grade_grades',
+            ['itemid' => $gradeitem->id, 'userid' => (int)$user2->id]
+        );
+        $this->assertNotFalse($grade1, 'Backfill: user 1 should have a grade row.');
+        $this->assertNotFalse($grade2, 'Backfill: user 2 should have a grade row.');
+        $this->assertEquals(7.0, (float)$grade1->finalgrade);
+        $this->assertEquals(9.0, (float)$grade2->finalgrade);
+    }
 }

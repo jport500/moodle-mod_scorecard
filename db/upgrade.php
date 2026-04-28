@@ -112,5 +112,34 @@ function xmldb_scorecard_upgrade(int $oldversion): bool {
         upgrade_mod_savepoint(true, 2026042701, 'scorecard');
     }
 
+    if ($oldversion < 2026042702) {
+        // Phase 5a.5 backfill: propagate scores from existing v0.4.x attempts
+        // to the gradebook for any scorecard with gradeenabled=1. The
+        // lifecycle hook in scorecard_add_instance (Phase 5a.1) creates grade
+        // items for new and edited scorecards from v0.5.0 onward, but
+        // pre-existing scorecards with attempts persisted before this upgrade
+        // have no grade items yet. This savepoint creates them.
+        //
+        // Idempotent on re-run: scorecard_update_grades calls grade_update
+        // which overwrites existing entries with the same values; if the
+        // savepoint is interrupted and resumed, scorecards already processed
+        // converge on the same end state without divergence.
+        //
+        // Synchronous backfill is safe at LMS Light's current deployment
+        // scale (two pre-launch customers, near-zero existing attempt
+        // history). Operators with substantial attempt history may experience
+        // longer upgrade times; cron-deferred backfill is a v0.6+ revisit if
+        // scaling demands. See CHANGES.md v0.5.0 ### Operator action for the
+        // operator-facing narrative.
+        require_once($CFG->dirroot . '/mod/scorecard/lib.php');
+
+        $scorecards = $DB->get_records('scorecard', ['gradeenabled' => 1]);
+        foreach ($scorecards as $scorecard) {
+            scorecard_update_grades($scorecard);
+        }
+
+        upgrade_mod_savepoint(true, 2026042702, 'scorecard');
+    }
+
     return true;
 }
