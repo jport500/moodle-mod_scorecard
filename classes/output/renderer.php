@@ -39,7 +39,6 @@ use stdClass;
  * Plugin renderer for mod_scorecard.
  */
 class renderer extends plugin_renderer_base {
-
     /**
      * Render a single item row in the manage screen.
      *
@@ -694,8 +693,8 @@ class renderer extends plugin_renderer_base {
             $isdeleted = !empty($row->deleted);
             $outofrange = ($value < $scalemin || $value > $scalemax);
 
-            // format_string strips block-level tags so the prompt composes
-            // cleanly inside <strong>. Reports are an audit-context label.
+            // The format_string() call strips block-level tags so the prompt
+            // composes cleanly inside <strong>. Reports are an audit-context label.
             $promptdisplay = format_string((string)($row->prompt ?? ''));
             if ($isdeleted) {
                 $promptdisplay = get_string('report:detail:deletedprefix', 'mod_scorecard') . $promptdisplay;
