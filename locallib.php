@@ -1714,3 +1714,152 @@ function scorecard_template_check_type($value, string $expectedtype): bool {
         default => false,
     };
 }
+
+/**
+ * Instantiate a new scorecard activity in a course from a validated template.
+ *
+ * Phase 6.4 helper — action-shaped. Caller has already validated `$template`
+ * via {@see scorecard_template_validate}; this helper assumes well-formed
+ * input and creates the activity. Returns the new course module id (cmid)
+ * on success; throws `\moodle_exception` on failure with operator-readable
+ * lang string identifiers under the `template:import:error:*` namespace.
+ *
+ * Calls Moodle's `add_moduleinfo()` for scorecard + cm record creation —
+ * standard activity-creation lifecycle including completion data, gradebook
+ * integration, course section assignment, `course_module_created` event.
+ * Items and bands then go through existing `scorecard_add_item` and
+ * `scorecard_add_band` helpers (plugin-internal records that don't need
+ * the activity-creation lifecycle).
+ *
+ * Sortorder gaps from the source template are preserved per Phase 6.4 Q24
+ * disposition — sortorder is opaque-positional, not semantic; preserving
+ * gaps maintains export-import-export round-trip identity. The
+ * `scorecard_add_item` and `scorecard_add_band` helpers honour an explicit
+ * sortorder field on the input data (only auto-derive MAX+1 when sortorder
+ * is unset).
+ *
+ * Atomicity: outer `start_delegated_transaction` wraps `add_moduleinfo`
+ * (which has its own inner transaction) and the items + bands inserts.
+ * Moodle's nested transactions ensure rollback at the outer scope unwinds
+ * the inner commits. Operator never sees a half-imported scorecard.
+ *
+ * Capability checking is the caller's responsibility — sub-step 6.5's
+ * import endpoint enforces `mod/scorecard:addinstance` at the course
+ * context before invoking this helper.
+ *
+ * @param array $template Validated template envelope (per SPEC §9.6).
+ *                        Must satisfy `scorecard_template_validate` upstream.
+ * @param int $courseid Destination course id.
+ * @param int $sectionnum Course section number; defaults to 0 (general).
+ * @return int New course module id (cmid).
+ * @throws \moodle_exception On any failure during instantiation. Lang
+ *                            string identifiers under `template:import:error:*`.
+ */
+function scorecard_template_import(array $template, int $courseid, int $sectionnum = 0): int {
+    global $DB, $CFG;
+    require_once($CFG->dirroot . '/course/modlib.php');
+
+    $course = $DB->get_record('course', ['id' => $courseid]);
+    if (!$course) {
+        throw new \moodle_exception('template:import:error:coursenotfound', 'mod_scorecard');
+    }
+
+    $moduleid = $DB->get_field('modules', 'id', ['name' => 'scorecard']);
+    if (!$moduleid) {
+        throw new \moodle_exception('template:import:error:cmcreatefailed', 'mod_scorecard');
+    }
+
+    $settings = $template['scorecard'];
+
+    // Construct the $moduleinfo shape that add_moduleinfo expects. Mirrors
+    // the form-output shape that mod_form would produce; set_moduleinfo_defaults
+    // fills in completion / availability / visibleoncoursepage defaults that
+    // we do not need to specify explicitly.
+    $moduleinfo = (object)[
+        'modulename' => 'scorecard',
+        'module' => (int)$moduleid,
+        'name' => $settings['name'],
+        'intro' => $settings['intro'],
+        'introformat' => $settings['introformat'],
+        'visible' => 1,
+        'cmidnumber' => '',
+        'groupmode' => 0,
+        'groupingid' => 0,
+        'section' => $sectionnum,
+        // Scorecard-specific fields that scorecard_add_instance reads.
+        'scalemin' => $settings['scalemin'],
+        'scalemax' => $settings['scalemax'],
+        'displaystyle' => $settings['displaystyle'],
+        'lowlabel' => $settings['lowlabel'],
+        'highlabel' => $settings['highlabel'],
+        'allowretakes' => $settings['allowretakes'],
+        'showresult' => $settings['showresult'],
+        'showpercentage' => $settings['showpercentage'],
+        'showitemsummary' => $settings['showitemsummary'],
+        'fallbackmessage' => $settings['fallbackmessage'],
+        'fallbackmessageformat' => $settings['fallbackmessageformat'],
+        'gradeenabled' => $settings['gradeenabled'],
+        'grade' => $settings['grade'],
+        'completionsubmit' => $settings['completionsubmit'],
+    ];
+
+    $transaction = $DB->start_delegated_transaction();
+    try {
+        $moduleinfo = add_moduleinfo($moduleinfo, $course);
+        $scorecardid = (int)$moduleinfo->instance;
+        $cmid = (int)$moduleinfo->coursemodule;
+
+        foreach ($template['items'] as $idx => $itemtemplate) {
+            $itemdata = (object)[
+                'scorecardid' => $scorecardid,
+                'prompt' => $itemtemplate['prompt'],
+                'promptformat' => $itemtemplate['promptformat'],
+                'lowlabel' => $itemtemplate['lowlabel'],
+                'highlabel' => $itemtemplate['highlabel'],
+                'visible' => $itemtemplate['visible'],
+                // Preserve source sortorder verbatim per Q24. The helper auto-
+                // derives MAX+1 only when sortorder is unset; passing it
+                // through preserves source gaps.
+                'sortorder' => $itemtemplate['sortorder'],
+            ];
+            $newitemid = scorecard_add_item($itemdata);
+            if (!$newitemid) {
+                throw new \moodle_exception(
+                    'template:import:error:itemcreatefailed',
+                    'mod_scorecard',
+                    '',
+                    (object)['index' => $idx]
+                );
+            }
+        }
+
+        foreach ($template['bands'] as $idx => $bandtemplate) {
+            $banddata = (object)[
+                'scorecardid' => $scorecardid,
+                'minscore' => $bandtemplate['minscore'],
+                'maxscore' => $bandtemplate['maxscore'],
+                'label' => $bandtemplate['label'],
+                'message' => $bandtemplate['message'],
+                'messageformat' => $bandtemplate['messageformat'],
+                'sortorder' => $bandtemplate['sortorder'],
+            ];
+            $newbandid = scorecard_add_band($banddata);
+            if (!$newbandid) {
+                throw new \moodle_exception(
+                    'template:import:error:bandcreatefailed',
+                    'mod_scorecard',
+                    '',
+                    (object)['index' => $idx]
+                );
+            }
+        }
+
+        $transaction->allow_commit();
+    } catch (\Throwable $e) {
+        // Rollback() re-throws; explicit re-throw is defensive.
+        $transaction->rollback($e instanceof \Exception ? $e : new \Exception($e->getMessage()));
+        throw $e;
+    }
+
+    return $cmid;
+}
