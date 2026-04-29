@@ -1,0 +1,28 @@
+{{!
+    @template mod_scorecard/learner_form
+
+    Outer learner submission form. Renders a hidden cmid + sesskey, the
+    pre-rendered fieldsets, and the submit button. POSTs to submit.php.
+
+    Context variables required:
+    * action       - Form action URL (submit.php).
+    * cmid         - Course module id, emitted in the hidden cmid field.
+    * sesskey      - Current session key, emitted in the hidden sesskey field.
+    * fieldsets    - Array of {html: <pre-rendered fieldset HTML>} entries.
+    * submitlabel  - Lang string submit:button.
+
+    Example context (json):
+    {
+        "action": "/mod/scorecard/submit.php",
+        "cmid": 7,
+        "sesskey": "abc123",
+        "fieldsets": [],
+        "submitlabel": "Submit"
+    }
+}}
+<form method="post" action="{{action}}" class="scorecard-learner-form">
+    <input type="hidden" name="cmid" value="{{cmid}}">
+    <input type="hidden" name="sesskey" value="{{sesskey}}">
+    {{#fieldsets}}{{{html}}}{{/fieldsets}}
+    <button type="submit" class="btn btn-primary mt-3">{{submitlabel}}</button>
+</form>

@@ -1,0 +1,19 @@
+{{!
+    @template mod_scorecard/manage_affordance
+
+    Persistent "Manage scorecard" button rendered above view.php's submit-capable
+    branch when the viewer also has mod/scorecard:manage.
+
+    Context variables required:
+    * manageurl  - Absolute URL to manage.php?id=<cmid>&tab=items.
+    * label      - Lang string view:manage_affordance.
+
+    Example context (json):
+    {
+        "manageurl": "/mod/scorecard/manage.php?id=42&tab=items",
+        "label": "Manage scorecard"
+    }
+}}
+<div class="scorecard-manage-affordance mb-3">
+    <a href="{{manageurl}}" class="btn btn-outline-secondary btn-sm">{{label}}</a>
+</div>

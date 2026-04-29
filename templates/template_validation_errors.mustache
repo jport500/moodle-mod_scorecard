@@ -1,0 +1,28 @@
+{{!
+    @template mod_scorecard/template_validation_errors
+
+    Block showing fatal validation errors from scorecard_template_validate.
+    Each entry pairs the dot-separated path (in <code>) with the lang-resolved
+    message, both HTML-escaped.
+
+    Context variables required:
+    * heading  - Lang string template:import:errors:heading.
+    * intro    - Lang string template:import:errors:intro.
+    * errors   - Array of {haspath, path, message} entries.
+
+    Example context (json):
+    {
+        "heading": "The template could not be imported",
+        "intro": "Fix these issues in the source file and try again.",
+        "errors": []
+    }
+}}
+<div class="alert alert-danger mb-3" role="alert">
+    <h4 class="alert-heading">{{heading}}</h4>
+    <p>{{intro}}</p>
+    <ul class="mb-0">
+        {{#errors}}
+        <li>{{#haspath}}<code>{{path}}</code>: {{/haspath}}{{message}}</li>
+        {{/errors}}
+    </ul>
+</div>

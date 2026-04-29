@@ -1,0 +1,20 @@
+{{!
+    @template mod_scorecard/template_export_affordance
+
+    "Export template" affordance shown above the manage tabs.
+
+    Context variables required:
+    * exporturl  - Absolute URL to template_export.php?id=<cmid>.
+    * label      - Lang string template:export:button.
+    * tooltip    - Lang string template:export:tooltip.
+
+    Example context (json):
+    {
+        "exporturl": "/mod/scorecard/template_export.php?id=42",
+        "label": "Export template",
+        "tooltip": "Download this scorecard as a JSON template."
+    }
+}}
+<div class="scorecard-template-export-affordance mb-3">
+    <a href="{{exporturl}}" class="btn btn-outline-secondary btn-sm" title="{{tooltip}}">{{label}}</a>
+</div>

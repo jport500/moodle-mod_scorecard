@@ -122,10 +122,7 @@ if (has_capability('mod/scorecard:submit', $context)) {
         echo $renderer->render_learner_form($scorecard, $items, (int)$cm->id);
     }
 } else if (has_capability('mod/scorecard:manage', $context)) {
-    $manageurl = new moodle_url('/mod/scorecard/manage.php', ['id' => $cm->id]);
-    $body = get_string('view:noitems_manager', 'mod_scorecard') . html_writer::empty_tag('br') .
-        html_writer::link($manageurl, get_string('view:manageitemslink', 'mod_scorecard'));
-    echo $OUTPUT->box($body, 'generalbox');
+    echo $renderer->render_manager_no_items((int)$cm->id);
 } else {
     echo $OUTPUT->box(get_string('view:noitems_learner', 'mod_scorecard'), 'generalbox');
 }

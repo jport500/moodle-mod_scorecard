@@ -1,0 +1,31 @@
+{{!
+    @template mod_scorecard/learner_no_items
+
+    Empty-state notice surfaced when the scorecard has no visible items.
+    Optionally renders a "manage items" affordance for callers who also
+    satisfy mod/scorecard:manage.
+
+    Context variables required:
+    * body              - Lang string view:noitems_learner.
+    * showmanagebutton  - Boolean; true when the affordance should render.
+    * manageurl         - Absolute URL to manage.php?id=<cmid>&tab=items
+                          (only required when showmanagebutton is true).
+    * managelabel       - Lang string view:manageitemslink
+                          (only required when showmanagebutton is true).
+
+    Example context (json):
+    {
+        "body": "This scorecard isn't ready yet.",
+        "showmanagebutton": true,
+        "manageurl": "/mod/scorecard/manage.php?id=42&tab=items",
+        "managelabel": "Add items and result bands"
+    }
+}}
+<div class="scorecard-noitems alert alert-info">
+    {{{body}}}
+    {{#showmanagebutton}}
+    <div class="mt-3">
+        <a href="{{manageurl}}" class="btn btn-primary">{{managelabel}}</a>
+    </div>
+    {{/showmanagebutton}}
+</div>

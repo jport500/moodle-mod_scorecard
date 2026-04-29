@@ -1,0 +1,43 @@
+{{!
+    @template mod_scorecard/band_row
+
+    Single band row on manage.php. Soft-deleted rows render their label inside
+    <s class="text-muted"> with a (deleted) badge appended; action links are
+    suppressed in that case. Range "min-max" follows the label as muted small
+    text. Optional message body renders under the label row.
+
+    Context variables required:
+    * label         - Already-formatted (format_string) band label.
+    * deleted       - Boolean; true when the row is soft-deleted.
+    * deletedbadge  - Lang string badge:deleted.
+    * rangetext     - "min-max" string composed from band->minscore / maxscore.
+    * hasmessage    - Boolean; true when the band has a message body.
+    * messagehtml   - Already-formatted (format_text) band message body.
+    * hasactions    - Boolean; true when the action cluster should render.
+    * actionshtml   - Pre-rendered edit/delete pix-icon link cluster.
+
+    Example context (json):
+    {
+        "label": "Strong",
+        "deleted": false,
+        "deletedbadge": "deleted",
+        "rangetext": "20-30",
+        "hasmessage": true,
+        "messagehtml": "<p>You did well.</p>",
+        "hasactions": true,
+        "actionshtml": ""
+    }
+}}
+<div class="item-row d-flex flex-row justify-content-between align-items-start py-2 border-bottom">
+    <div class="item-body flex-grow-1">
+        <div class="band-label-row">
+            {{#deleted}}<s class="text-muted">{{{label}}}</s><span class="badge bg-secondary text-white ms-2">{{deletedbadge}}</span>{{/deleted}}
+            {{^deleted}}{{{label}}}{{/deleted}}
+            <span class="small text-muted ms-2">{{rangetext}}</span>
+        </div>
+        {{#hasmessage}}<div class="small text-muted mt-1">{{{messagehtml}}}</div>{{/hasmessage}}
+    </div>
+    {{#hasactions}}
+    <div class="item-actions ms-3">{{{actionshtml}}}</div>
+    {{/hasactions}}
+</div>

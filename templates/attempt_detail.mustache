@@ -1,0 +1,35 @@
+{{!
+    @template mod_scorecard/attempt_detail
+
+    Per-attempt expandable detail block in the report table. Native HTML5
+    <details>/<summary> for keyboard + screen-reader accessibility, no JS.
+
+    Context variables required:
+    * summary   - Lang string report:detail:summary (already substituted with count).
+    * hasrows   - Boolean; true to render the body div.
+    * rows      - Array of response descriptors:
+                    - isdeleted     bool
+                    - prompthtml    Already-formatted prompt HTML.
+                    - responsecopy  Lang string report:detail:response.
+                    - outofrange    bool
+                    - outofrangetext Lang string report:detail:outofrange.
+
+    Example context (json):
+    {
+        "summary": "3 responses",
+        "hasrows": true,
+        "rows": []
+    }
+}}
+<details class="scorecard-attempt-detail">
+    <summary>{{{summary}}}</summary>
+    {{#hasrows}}
+    <div class="scorecard-attempt-detail-body">
+        {{#rows}}
+        <p class="scorecard-attempt-detail-item{{#isdeleted}} is-deleted text-muted fst-italic{{/isdeleted}}">
+            <strong>{{{prompthtml}}}</strong>: {{{responsecopy}}}{{#outofrange}}<span class="text-danger">{{{outofrangetext}}}</span>{{/outofrange}}
+        </p>
+        {{/rows}}
+    </div>
+    {{/hasrows}}
+</details>

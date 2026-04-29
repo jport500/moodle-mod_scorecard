@@ -1,0 +1,54 @@
+{{!
+    @template mod_scorecard/learner_form_item
+
+    Single item fieldset for the learner form. Legend = prompt; anchor spans
+    sit either side of the radio group; aria-describedby pairs them with the
+    leftmost / rightmost radios per SPEC §10.1 accessibility floor.
+
+    Context variables required:
+    * itemid          - Numeric item id (drives ids and the response[] name key).
+    * prompthtml      - Already-formatted (format_text) prompt HTML for the legend.
+    * haserror        - Boolean; true to render the inline error block.
+    * errortext       - Plain error string (HTML-escaped on render).
+    * haslowanchor    - Boolean; true when a low anchor span should render.
+    * lowanchorid     - Element id for the low anchor span.
+    * lowtext         - Already-formatted (format_string) low anchor text.
+    * hashighanchor   - Boolean; true when a high anchor span should render.
+    * highanchorid    - Element id for the high anchor span.
+    * hightext        - Already-formatted (format_string) high anchor text.
+    * radios          - Array of radio descriptors:
+                          - id, name, value, checked, hasdescribedby, describedby.
+
+    Example context (json):
+    {
+        "itemid": 12,
+        "prompthtml": "<p>How confident are you?</p>",
+        "haserror": false,
+        "errortext": "",
+        "haslowanchor": true,
+        "lowanchorid": "scorecard-anchor-low-12",
+        "lowtext": "Not at all",
+        "hashighanchor": true,
+        "highanchorid": "scorecard-anchor-high-12",
+        "hightext": "Completely",
+        "radios": []
+    }
+}}
+<fieldset class="scorecard-item-fieldset" data-itemid="{{itemid}}">
+    <legend class="scorecard-item-prompt">{{{prompthtml}}}</legend>
+    {{#haserror}}
+    <div class="scorecard-item-error alert alert-danger py-1 px-2" role="alert">{{errortext}}</div>
+    {{/haserror}}
+    <div class="scorecard-radio-row">
+        {{#haslowanchor}}<span class="scorecard-anchor scorecard-anchor-low" id="{{lowanchorid}}">{{{lowtext}}}</span>{{/haslowanchor}}
+        <div class="scorecard-radio-group">
+            {{#radios}}
+            <label class="scorecard-radio-label" for="{{id}}">
+                <input type="radio" name="{{name}}" value="{{value}}" id="{{id}}" class="scorecard-radio-input"{{#checked}} checked="checked"{{/checked}}{{#hasdescribedby}} aria-describedby="{{describedby}}"{{/hasdescribedby}}>
+                <span class="scorecard-radio-value">{{value}}</span>
+            </label>
+            {{/radios}}
+        </div>
+        {{#hashighanchor}}<span class="scorecard-anchor scorecard-anchor-high" id="{{highanchorid}}">{{{hightext}}}</span>{{/hashighanchor}}
+    </div>
+</fieldset>

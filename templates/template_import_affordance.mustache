@@ -1,0 +1,22 @@
+{{!
+    @template mod_scorecard/template_import_affordance
+
+    "Import template" affordance shown above the manage tabs for an empty
+    scorecard. Caller suppresses this once the scorecard has any items or
+    bands per Phase 6.5b Q-rework-2.
+
+    Context variables required:
+    * importurl  - Absolute URL to template_import.php?cmid=<cmid>.
+    * label      - Lang string template:import:empty:button.
+    * tooltip    - Lang string template:import:empty:tooltip.
+
+    Example context (json):
+    {
+        "importurl": "/mod/scorecard/template_import.php?cmid=42",
+        "label": "Import template",
+        "tooltip": "Import a JSON template to populate this scorecard."
+    }
+}}
+<div class="scorecard-template-import-affordance mb-3">
+    <a href="{{importurl}}" class="btn btn-outline-secondary btn-sm" title="{{tooltip}}">{{label}}</a>
+</div>

@@ -1,0 +1,18 @@
+{{!
+    @template mod_scorecard/previous_attempt_callout
+
+    Compact summary of the previous attempt rendered above the form on retake.
+
+    Context variables required:
+    * headline  - Lang string retake:previousattempt:headline.
+    * body      - Lang string retake:previousattempt:format (already substituted).
+
+    Example context (json):
+    {
+        "headline": "Most recent attempt",
+        "body": "1 January 2026, 18 / 30, Strong"
+    }
+}}
+<div class="scorecard-previous-attempt-callout alert alert-info">
+    <strong>{{{headline}}}</strong> &mdash; {{{body}}}
+</div>

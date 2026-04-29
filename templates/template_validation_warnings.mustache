@@ -1,0 +1,38 @@
+{{!
+    @template mod_scorecard/template_validation_warnings
+
+    Block showing non-blocking validation warnings (cross-version mismatch,
+    unknown fields ignored). Two display modes:
+      - requireconfirmation = true : pre-import notice telling the operator
+        to acknowledge via the confirmation form rendered below.
+      - requireconfirmation = false: post-import informational record of what
+        was ignored on import.
+
+    Context variables required:
+    * heading              - Lang string template:import:warnings:heading.
+    * intro                - Lang string template:import:warnings:intro.
+    * warnings             - Array of {haspath, path, message} entries.
+    * requireconfirmation  - Boolean.
+    * confirmtext          - Lang string template:import:warnings:confirm.
+
+    Example context (json):
+    {
+        "heading": "The template imported with warnings",
+        "intro": "Some fields were ignored.",
+        "warnings": [],
+        "requireconfirmation": true,
+        "confirmtext": "Confirm below to import anyway."
+    }
+}}
+<div class="alert alert-warning mb-3" role="alert">
+    <h4 class="alert-heading">{{heading}}</h4>
+    <p>{{intro}}</p>
+    <ul class="mb-2">
+        {{#warnings}}
+        <li>{{#haspath}}<code>{{path}}</code>: {{/haspath}}{{message}}</li>
+        {{/warnings}}
+    </ul>
+    {{#requireconfirmation}}
+    <p class="mb-0 mt-2"><strong>{{confirmtext}}</strong></p>
+    {{/requireconfirmation}}
+</div>

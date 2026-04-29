@@ -1,0 +1,46 @@
+{{!
+    @template mod_scorecard/item_row
+
+    Single item row on manage.php. Soft-deleted rows render their prompt
+    inside <s class="text-muted"> with a (deleted) badge appended; action
+    links are suppressed in that case. Hidden (visible=0) live rows render
+    a (hidden) badge after the prompt. Anchor-summary sub-text appears under
+    the prompt when either lowlabel or highlabel is set.
+
+    Context variables required:
+    * prompt          - Already-formatted (format_text) prompt HTML.
+    * deleted         - Boolean; true when the row is soft-deleted.
+    * deletedbadge    - Lang string badge:deleted.
+    * showhiddenbadge - Boolean; true when the live row is hidden.
+    * hiddenbadge     - Lang string badge:hidden.
+    * hasanchors      - Boolean; true when at least one of lowlabel/highlabel is set.
+    * anchorlow       - Already-formatted (format_string) low anchor text.
+    * anchorhigh      - Already-formatted (format_string) high anchor text.
+    * hasactions      - Boolean; true when the action cluster should render.
+    * actionshtml     - Pre-rendered move/edit/delete pix-icon link cluster.
+
+    Example context (json):
+    {
+        "prompt": "<p>How confident are you?</p>",
+        "deleted": false,
+        "deletedbadge": "deleted",
+        "showhiddenbadge": false,
+        "hiddenbadge": "hidden",
+        "hasanchors": false,
+        "anchorlow": "",
+        "anchorhigh": "",
+        "hasactions": true,
+        "actionshtml": ""
+    }
+}}
+<div class="item-row d-flex flex-row justify-content-between align-items-start py-2 border-bottom">
+    <div class="item-body flex-grow-1">
+        {{#deleted}}<s class="text-muted">{{{prompt}}}</s><span class="badge bg-secondary text-white ms-2">{{deletedbadge}}</span>{{/deleted}}
+        {{^deleted}}{{{prompt}}}{{/deleted}}
+        {{#showhiddenbadge}}<span class="badge bg-warning text-dark ms-2">{{hiddenbadge}}</span>{{/showhiddenbadge}}
+        {{#hasanchors}}<div class="small text-muted mt-1">{{anchorlow}} &mdash; {{anchorhigh}}</div>{{/hasanchors}}
+    </div>
+    {{#hasactions}}
+    <div class="item-actions ms-3">{{{actionshtml}}}</div>
+    {{/hasactions}}
+</div>

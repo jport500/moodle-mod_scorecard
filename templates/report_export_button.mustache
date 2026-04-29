@@ -1,0 +1,19 @@
+{{!
+    @template mod_scorecard/report_export_button
+
+    Action-row "Export CSV" button shown above the report table when the
+    viewer holds mod/scorecard:export.
+
+    Context variables required:
+    * exporturl  - Absolute URL to export.php?id=<cmid>.
+    * label      - Lang string report:export:button.
+
+    Example context (json):
+    {
+        "exporturl": "/mod/scorecard/export.php?id=42",
+        "label": "Export CSV"
+    }
+}}
+<div class="scorecard-report-actions mb-3">
+    <a href="{{exporturl}}" class="btn btn-secondary btn-sm">{{label}}</a>
+</div>

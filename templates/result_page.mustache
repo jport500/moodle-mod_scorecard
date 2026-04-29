@@ -1,0 +1,60 @@
+{{!
+    @template mod_scorecard/result_page
+
+    Learner result surface: snapshotted score headline, optional percentage,
+    optional band heading + message body, optional collapsed item summary.
+    Reads from snapshotted attempt fields only -- never live bands -- per
+    SPEC §11.2 result stability rule.
+
+    Context variables required:
+    * headline         - Lang string result:headline (already substituted).
+    * showpercentage   - Boolean; true to render the percentage block.
+    * percentage       - Lang string result:percentage (already substituted).
+    * hasbandlabel     - Boolean; true when bandlabelsnapshot is non-empty.
+    * bandlabel        - Already-formatted (format_string) band label.
+    * hasbandmessage   - Boolean; true when bandmessagesnapshot is non-empty.
+    * bandmessage      - Already-formatted (format_text) band message body.
+    * showsummary      - Boolean; true to render the item-summary <details>.
+    * summaryheading   - Lang string result:itemsummary_heading.
+    * items            - Array of {prompt, value} entries (prompt is already
+                         HTML, possibly wrapped with the deleted marker).
+
+    Example context (json):
+    {
+        "headline": "Your score: 18 out of 30",
+        "showpercentage": true,
+        "percentage": "60%",
+        "hasbandlabel": true,
+        "bandlabel": "Strong",
+        "hasbandmessage": true,
+        "bandmessage": "<p>You did well.</p>",
+        "showsummary": false,
+        "summaryheading": "Your responses",
+        "items": []
+    }
+}}
+<div class="scorecard-result-page">
+    <h3 class="scorecard-result-headline">{{{headline}}}</h3>
+    {{#showpercentage}}
+    <div class="scorecard-result-percentage text-muted">{{{percentage}}}</div>
+    {{/showpercentage}}
+    {{#hasbandlabel}}
+    <h4 class="scorecard-result-band-label">{{{bandlabel}}}</h4>
+    {{/hasbandlabel}}
+    {{#hasbandmessage}}
+    <div class="scorecard-result-band-message">{{{bandmessage}}}</div>
+    {{/hasbandmessage}}
+    {{#showsummary}}
+    <details class="scorecard-result-summary mt-3">
+        <summary>{{summaryheading}}</summary>
+        <div class="scorecard-result-items">
+            {{#items}}
+            <div class="scorecard-result-item">
+                <div class="scorecard-result-item-prompt">{{{prompt}}}</div>
+                <div class="scorecard-result-item-value text-muted">{{{value}}}</div>
+            </div>
+            {{/items}}
+        </div>
+    </details>
+    {{/showsummary}}
+</div>

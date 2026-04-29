@@ -1,0 +1,27 @@
+{{!
+    @template mod_scorecard/items_list
+
+    Items list on manage.php: pre-rendered row HTML or empty-state notice,
+    followed by the "Add an item" affordance.
+
+    Context variables required:
+    * hasrows     - Boolean; true when at least one row was rendered.
+    * rowshtml    - Concatenation of pre-rendered item_row HTML.
+    * emptylabel  - Lang string manage:items:empty.
+    * addurl      - Absolute URL to manage.php?id=<cmid>&tab=items&action=add.
+    * addlabel    - Lang string item:add.
+
+    Example context (json):
+    {
+        "hasrows": false,
+        "rowshtml": "",
+        "emptylabel": "No items yet.",
+        "addurl": "/mod/scorecard/manage.php?id=42&tab=items&action=add",
+        "addlabel": "Add an item"
+    }
+}}
+{{#hasrows}}{{{rowshtml}}}{{/hasrows}}
+{{^hasrows}}<div class="text-muted py-2">{{emptylabel}}</div>{{/hasrows}}
+<div class="mt-3">
+    <a href="{{addurl}}" class="btn btn-primary">{{addlabel}}</a>
+</div>

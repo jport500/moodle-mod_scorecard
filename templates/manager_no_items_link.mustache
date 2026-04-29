@@ -1,0 +1,20 @@
+{{!
+    @template mod_scorecard/manager_no_items_link
+
+    Inner content of the "no items" notice shown to a manager-only viewer
+    (has :manage but not :submit). Wrapped in $OUTPUT->box() by the renderer.
+
+    Context variables required:
+    * body       - Lang string view:noitems_manager.
+    * manageurl  - Absolute URL to manage.php?id=<cmid>.
+    * linklabel  - Lang string view:manageitemslink.
+
+    Example context (json):
+    {
+        "body": "There are no items to score yet.",
+        "manageurl": "/mod/scorecard/manage.php?id=42",
+        "linklabel": "Manage items"
+    }
+}}
+{{{body}}}<br>
+<a href="{{manageurl}}">{{linklabel}}</a>

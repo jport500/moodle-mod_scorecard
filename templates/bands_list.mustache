@@ -1,0 +1,27 @@
+{{!
+    @template mod_scorecard/bands_list
+
+    Bands list on manage.php: pre-rendered row HTML or empty-state notice,
+    followed by the "Add a band" affordance.
+
+    Context variables required:
+    * hasrows     - Boolean; true when at least one row was rendered.
+    * rowshtml    - Concatenation of pre-rendered band_row HTML.
+    * emptylabel  - Lang string manage:bands:empty.
+    * addurl      - Absolute URL to manage.php?id=<cmid>&tab=bands&action=add.
+    * addlabel    - Lang string band:add.
+
+    Example context (json):
+    {
+        "hasrows": false,
+        "rowshtml": "",
+        "emptylabel": "No bands yet.",
+        "addurl": "/mod/scorecard/manage.php?id=42&tab=bands&action=add",
+        "addlabel": "Add a band"
+    }
+}}
+{{#hasrows}}{{{rowshtml}}}{{/hasrows}}
+{{^hasrows}}<div class="text-muted py-2">{{emptylabel}}</div>{{/hasrows}}
+<div class="mt-3">
+    <a href="{{addurl}}" class="btn btn-primary">{{addlabel}}</a>
+</div>

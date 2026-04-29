@@ -1,0 +1,38 @@
+{{!
+    @template mod_scorecard/template_warnings_confirmation_form
+
+    Confirmation form rendered below the warnings block when the import
+    helper returns state='warnings'. POSTs back to template_import.php with
+    the original JSON content base64-encoded in pendingjson, plus
+    confirmwarnings=1 to authorise the import. sesskey defends from CSRF.
+
+    Context variables required:
+    * action        - Form action URL (template_import.php).
+    * cmid          - Course module id.
+    * pendingjson   - base64-encoded original JSON template content.
+    * sesskey       - Current session key.
+    * cancelurl     - URL to manage.php to abandon the round-trip.
+    * confirmlabel  - Lang string template:import:warnings:confirmbutton.
+    * cancellabel   - Lang string template:import:warnings:cancellabel.
+
+    Example context (json):
+    {
+        "action": "/mod/scorecard/template_import.php",
+        "cmid": 42,
+        "pendingjson": "eyJpdGVtcyI6W119",
+        "sesskey": "abc123",
+        "cancelurl": "/mod/scorecard/manage.php?id=42",
+        "confirmlabel": "Yes, import anyway",
+        "cancellabel": "Cancel"
+    }
+}}
+<form method="post" action="{{action}}" class="scorecard-template-warnings-confirmation mb-3">
+    <input type="hidden" name="cmid" value="{{cmid}}">
+    <input type="hidden" name="pendingjson" value="{{pendingjson}}">
+    <input type="hidden" name="confirmwarnings" value="1">
+    <input type="hidden" name="sesskey" value="{{sesskey}}">
+    <div class="scorecard-template-warnings-actions">
+        <button type="submit" class="btn btn-warning">{{confirmlabel}}</button>
+        <a href="{{cancelurl}}" class="btn btn-link ms-2">{{cancellabel}}</a>
+    </div>
+</form>

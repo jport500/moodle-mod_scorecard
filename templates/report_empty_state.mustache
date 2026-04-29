@@ -1,0 +1,16 @@
+{{!
+    @template mod_scorecard/report_empty_state
+
+    Report empty-state notice. body resolves to either report:empty (no
+    attempts at all) or report:empty:filtered (group filter excludes all
+    attempts), per the renderer's $filtered argument.
+
+    Context variables required:
+    * body  - Lang string report:empty or report:empty:filtered.
+
+    Example context (json):
+    {
+        "body": "No attempts have been submitted yet."
+    }
+}}
+<div class="scorecard-report-empty alert alert-info">{{{body}}}</div>
