@@ -1,5 +1,13 @@
 # mod_scorecard release notes
 
+## Unreleased
+
+### Shipped
+
+**Operator and instructor guide.** Lives at `docs/USER-GUIDE.md`; covers scorecard authoring, JSON templates, reporting, backup/restore/privacy, and troubleshooting. Companion to README.md (which covers installation/upgrade) and assumes the plugin is already installed.
+
+**Renderer refactor.** `classes/output/renderer.php` markup moved from inline `html_writer` chains to Mustache templates under `templates/`. Public renderer API unchanged; no operator-facing behavior change. Fix-forward at `6be1dbf` addressed phpcs violations missed at original commit; full retrospective in `docs/RENDERER-REFACTOR-RETROSPECTIVE.md`.
+
 ## v0.7.0 — Phase 6 (JSON templates) (2026-04-28)
 
 **MATURITY_ALPHA. JSON template export and import are now usable
