@@ -206,7 +206,18 @@ echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('manage:heading', 'mod_scorecard'));
 
 $renderer = $PAGE->get_renderer('mod_scorecard');
-echo $renderer->render_template_export_affordance($cm->id);
+
+// Phase 6.5b: empty-state affordance — show "Import template" only when
+// the scorecard has no items AND no bands. Once populated, the import
+// affordance is suppressed entirely (Q-rework-2 (a)) and the export
+// affordance becomes meaningful instead.
+$itemcount = $DB->count_records('scorecard_items', ['scorecardid' => (int)$scorecard->id]);
+$bandcount = $DB->count_records('scorecard_bands', ['scorecardid' => (int)$scorecard->id]);
+if ($itemcount === 0 && $bandcount === 0) {
+    echo $renderer->render_template_import_affordance($cm->id);
+} else {
+    echo $renderer->render_template_export_affordance($cm->id);
+}
 
 $tabs = [
     new tabobject(

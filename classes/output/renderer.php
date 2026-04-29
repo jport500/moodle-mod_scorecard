@@ -255,6 +255,212 @@ class renderer extends plugin_renderer_base {
     }
 
     /**
+     * Render the validation errors block on the import page.
+     *
+     * Phase 6.5: operator-readable list of fatal validation errors from
+     * scorecard_template_validate. Each entry shows the dot-separated path
+     * (so operator knows which field failed) and the lang-resolved message.
+     * Block import with this rendering — the operator must fix the source
+     * template externally and re-upload.
+     *
+     * @param array $errors List of `['path' => string, 'code' => string,
+     *                       'message' => string]` entries from the validator.
+     * @return string Rendered HTML.
+     */
+    public function render_template_validation_errors(array $errors): string {
+        $items = [];
+        foreach ($errors as $err) {
+            $path = (string)($err['path'] ?? '');
+            $msg = get_string((string)($err['message'] ?? ''), 'mod_scorecard');
+            $body = $path !== ''
+                ? html_writer::tag('code', s($path)) . ': ' . s($msg)
+                : s($msg);
+            $items[] = html_writer::tag('li', $body);
+        }
+        $list = html_writer::tag('ul', implode('', $items), ['class' => 'mb-0']);
+
+        $heading = html_writer::tag(
+            'h4',
+            get_string('template:import:errors:heading', 'mod_scorecard'),
+            ['class' => 'alert-heading']
+        );
+        $intro = html_writer::tag(
+            'p',
+            get_string('template:import:errors:intro', 'mod_scorecard')
+        );
+
+        return html_writer::div(
+            $heading . $intro . $list,
+            'alert alert-danger mb-3',
+            ['role' => 'alert']
+        );
+    }
+
+    /**
+     * Render the validation warnings block.
+     *
+     * Phase 6.5: warnings are non-blocking by design (cross-version mismatch,
+     * unknown fields ignored). Two display modes:
+     * - $requireconfirmation = true (pre-import) — surfaces a "I understand
+     *   these warnings" notice; operator's actual confirmation comes from
+     *   the form's confirmwarnings hidden field, which the form manipulates
+     *   via re-render. The notice instructs the operator to resubmit with
+     *   the form below to acknowledge.
+     * - $requireconfirmation = false (post-import success page) — shows the
+     *   warnings as informational documentation of what was ignored on import.
+     *
+     * @param array $warnings List of `['path' => string, 'code' => string,
+     *                        'message' => string]` entries from the validator.
+     * @param bool $requireconfirmation True before import; false after.
+     * @return string Rendered HTML.
+     */
+    public function render_template_validation_warnings(array $warnings, bool $requireconfirmation): string {
+        $items = [];
+        foreach ($warnings as $w) {
+            $path = (string)($w['path'] ?? '');
+            $msg = get_string((string)($w['message'] ?? ''), 'mod_scorecard');
+            $body = $path !== ''
+                ? html_writer::tag('code', s($path)) . ': ' . s($msg)
+                : s($msg);
+            $items[] = html_writer::tag('li', $body);
+        }
+        $list = html_writer::tag('ul', implode('', $items), ['class' => 'mb-2']);
+
+        $heading = html_writer::tag(
+            'h4',
+            get_string('template:import:warnings:heading', 'mod_scorecard'),
+            ['class' => 'alert-heading']
+        );
+        $intro = html_writer::tag(
+            'p',
+            get_string('template:import:warnings:intro', 'mod_scorecard')
+        );
+
+        $confirm = '';
+        if ($requireconfirmation) {
+            $confirm = html_writer::tag(
+                'p',
+                html_writer::tag(
+                    'strong',
+                    get_string('template:import:warnings:confirm', 'mod_scorecard')
+                ),
+                ['class' => 'mb-0 mt-2']
+            );
+        }
+
+        return html_writer::div(
+            $heading . $intro . $list . $confirm,
+            'alert alert-warning mb-3',
+            ['role' => 'alert']
+        );
+    }
+
+    /**
+     * Render the "Import template" affordance shown above the manage tabs
+     * for an empty scorecard.
+     *
+     * Phase 6.5b: visibility is controlled by the caller (manage.php checks
+     * item + band counts before invoking this method). When the scorecard
+     * has any content, the affordance is suppressed entirely per Q-rework-2 —
+     * import is meaningful only on the empty state.
+     *
+     * Styled identically to the export affordance (outline-secondary
+     * btn-sm) so both authoring affordances read as sibling controls when
+     * present together. (In practice they are mutually exclusive: empty
+     * scorecards show only Import; populated scorecards show only Export.)
+     *
+     * @param int $cmid Course module id; the link target's cmid parameter.
+     * @return string Rendered HTML.
+     */
+    public function render_template_import_affordance(int $cmid): string {
+        $importurl = new moodle_url('/mod/scorecard/template_import.php', ['cmid' => $cmid]);
+        return html_writer::div(
+            html_writer::link(
+                $importurl,
+                get_string('template:import:empty:button', 'mod_scorecard'),
+                [
+                    'class' => 'btn btn-outline-secondary btn-sm',
+                    'title' => get_string('template:import:empty:tooltip', 'mod_scorecard'),
+                ]
+            ),
+            'scorecard-template-import-affordance mb-3'
+        );
+    }
+
+    /**
+     * Render the warnings-state confirmation form.
+     *
+     * Phase 6.5b Q-rework-5: when the orchestration helper returns
+     * `state='warnings'`, the endpoint surfaces this form below the warnings
+     * block. Operator clicks "Yes, import anyway" to acknowledge and proceed;
+     * the form posts back to the same endpoint with `confirmwarnings=1` and
+     * the original JSON content base64-encoded in a hidden field, avoiding
+     * a re-upload round-trip.
+     *
+     * Templates are capped at 1 MB by the form (filepicker maxbytes); base64
+     * encoding adds ~33% overhead so the worst-case hidden-field payload is
+     * ~1.3 MB, well within Moodle's default form input size. If a future
+     * scaling question surfaces, course-correct to $SESSION-stored
+     * intermediate state or re-upload-required-after-warnings flow.
+     *
+     * sesskey field defends the confirmation surface from CSRF — confirmation
+     * is a "yes proceed with this side-effect" action and warrants the same
+     * CSRF discipline as the items / bands authoring forms.
+     *
+     * @param int $cmid Course module id; preserved across the round-trip.
+     * @param string $rawjson Raw JSON content from the original upload;
+     *                         base64-encoded into a hidden field.
+     * @return string Rendered HTML form.
+     */
+    public function render_template_warnings_confirmation_form(int $cmid, string $rawjson): string {
+        $action = (new moodle_url('/mod/scorecard/template_import.php'))->out(false);
+        $cancelurl = new moodle_url('/mod/scorecard/manage.php', ['id' => $cmid]);
+
+        $hidden = html_writer::empty_tag('input', [
+            'type' => 'hidden',
+            'name' => 'cmid',
+            'value' => (string)$cmid,
+        ]) . html_writer::empty_tag('input', [
+            'type' => 'hidden',
+            'name' => 'pendingjson',
+            'value' => base64_encode($rawjson),
+        ]) . html_writer::empty_tag('input', [
+            'type' => 'hidden',
+            'name' => 'confirmwarnings',
+            'value' => '1',
+        ]) . html_writer::empty_tag('input', [
+            'type' => 'hidden',
+            'name' => 'sesskey',
+            'value' => sesskey(),
+        ]);
+
+        $confirmbutton = html_writer::tag(
+            'button',
+            get_string('template:import:warnings:confirmbutton', 'mod_scorecard'),
+            ['type' => 'submit', 'class' => 'btn btn-warning']
+        );
+
+        $cancellink = html_writer::link(
+            $cancelurl,
+            get_string('template:import:warnings:cancellabel', 'mod_scorecard'),
+            ['class' => 'btn btn-link ms-2']
+        );
+
+        return html_writer::tag(
+            'form',
+            $hidden . html_writer::div(
+                $confirmbutton . $cancellink,
+                'scorecard-template-warnings-actions'
+            ),
+            [
+                'method' => 'post',
+                'action' => $action,
+                'class' => 'scorecard-template-warnings-confirmation mb-3',
+            ]
+        );
+    }
+
+    /**
      * Render the "Export template" affordance shown above the manage tabs.
      *
      * Phase 6.1: top-level operation surfaced from any tab on manage.php

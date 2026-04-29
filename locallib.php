@@ -1863,3 +1863,194 @@ function scorecard_template_import(array $template, int $courseid, int $sectionn
 
     return $cmid;
 }
+
+/**
+ * Populate an existing empty scorecard's items + bands from a validated template.
+ *
+ * Phase 6.5b helper — populate-existing path (parallel to 6.4's create-new
+ * `scorecard_template_import`). Caller has already validated the template
+ * via `scorecard_template_validate` AND confirmed the destination scorecard
+ * is empty (zero items + zero bands); this helper trusts both preconditions
+ * and inserts items + bands directly.
+ *
+ * Coexistence with sub-step 6.4's `scorecard_template_import`:
+ * - `scorecard_template_import(array $template, int $courseid, int $sectionnum = 0): int`
+ *   is the create-new path — calls `add_moduleinfo` to scaffold a fresh
+ *   scorecard activity with cm record, then loops items + bands. Useful for
+ *   programmatic create-from-template workflows (CLI bulk operations,
+ *   future API endpoints).
+ * - `scorecard_template_populate(array $template, int $scorecardid): void`
+ *   is the populate-existing path — operator already created an empty
+ *   scorecard via standard "Add an activity" workflow; this helper inserts
+ *   items + bands into the existing row. Surfaced via the manage.php
+ *   empty-state affordance at sub-step 6.5b.
+ *
+ * Both paths preserve sortorder gaps from the source template per Phase 6.4
+ * Q24 disposition — `scorecard_add_item` and `scorecard_add_band` honour
+ * an explicit sortorder field on the input data.
+ *
+ * Atomicity: single `start_delegated_transaction` over items + bands
+ * inserts. Rollback on any failure unwinds partial population. The
+ * scorecard row itself was already committed by the operator's prior
+ * "Add an activity" save — no rollback of the scorecard row on populate
+ * failure (operator can retry import or delete the empty scorecard
+ * normally).
+ *
+ * @param array $template Validated template envelope (per SPEC §9.6).
+ * @param int $scorecardid Existing empty scorecard's id.
+ * @throws \moodle_exception On any failure during population. Lang
+ *                            string identifiers under `template:import:error:*`.
+ */
+function scorecard_template_populate(array $template, int $scorecardid): void {
+    global $DB;
+
+    $transaction = $DB->start_delegated_transaction();
+    try {
+        foreach ($template['items'] as $idx => $itemtemplate) {
+            $itemdata = (object)[
+                'scorecardid' => $scorecardid,
+                'prompt' => $itemtemplate['prompt'],
+                'promptformat' => $itemtemplate['promptformat'],
+                'lowlabel' => $itemtemplate['lowlabel'],
+                'highlabel' => $itemtemplate['highlabel'],
+                'visible' => $itemtemplate['visible'],
+                'sortorder' => $itemtemplate['sortorder'],
+            ];
+            $newitemid = scorecard_add_item($itemdata);
+            if (!$newitemid) {
+                throw new \moodle_exception(
+                    'template:import:error:itemcreatefailed',
+                    'mod_scorecard',
+                    '',
+                    (object)['index' => $idx]
+                );
+            }
+        }
+
+        foreach ($template['bands'] as $idx => $bandtemplate) {
+            $banddata = (object)[
+                'scorecardid' => $scorecardid,
+                'minscore' => $bandtemplate['minscore'],
+                'maxscore' => $bandtemplate['maxscore'],
+                'label' => $bandtemplate['label'],
+                'message' => $bandtemplate['message'],
+                'messageformat' => $bandtemplate['messageformat'],
+                'sortorder' => $bandtemplate['sortorder'],
+            ];
+            $newbandid = scorecard_add_band($banddata);
+            if (!$newbandid) {
+                throw new \moodle_exception(
+                    'template:import:error:bandcreatefailed',
+                    'mod_scorecard',
+                    '',
+                    (object)['index' => $idx]
+                );
+            }
+        }
+
+        $transaction->allow_commit();
+    } catch (\Throwable $e) {
+        $transaction->rollback($e instanceof \Exception ? $e : new \Exception($e->getMessage()));
+        throw $e;
+    }
+}
+
+/**
+ * Orchestrate the populate-existing import flow: cmid resolution → empty-state
+ * precheck → JSON parse → validate → optional confirmation gate → populate.
+ * Pure-ish helper composing 6.3 validate + 6.5b populate; returns a
+ * structured state object that the endpoint at template_import.php renders
+ * against.
+ *
+ * Phase 6.5b architectural reversal — was courseid-based create-new at 6.5;
+ * now cmid-based populate-existing per the operator workflow surfaced at
+ * walkthrough ("I created an empty scorecard via 'Add an activity'; let me
+ * populate it from a template").
+ *
+ * State machine:
+ * - Target scorecard not empty (any items OR bands present) → `state='errors'`,
+ *   single `template:import:error:notempty` entry. Empty-state gate enforces
+ *   create-new-only semantics from SPEC §9.6.
+ * - Raw JSON fails to decode → `state='errors'`, single `jsondecode_error`.
+ * - Validator (6.3) returns errors → `state='errors'`.
+ * - Validator returns only warnings AND `$confirmed=false` → `state='warnings'`.
+ *   Endpoint surfaces a confirmation form for the operator to acknowledge.
+ * - Clean (no errors/warnings) OR operator confirmed warnings → invoke
+ *   `scorecard_template_populate` → `state='success'`, `cmid` echoed back.
+ *
+ * @param int $cmid Destination course module id (existing empty scorecard).
+ * @param string $rawjson Raw JSON text uploaded by the operator.
+ * @param bool $confirmed Operator's acknowledgement of warnings (Q-rework-5).
+ * @return array `['state' => string, 'errors' => array, 'warnings' => array,
+ *               'cmid' => int|null]`.
+ */
+function scorecard_template_import_handle(
+    int $cmid,
+    string $rawjson,
+    bool $confirmed = false
+): array {
+    global $DB;
+
+    $cm = get_coursemodule_from_id('scorecard', $cmid, 0, false, MUST_EXIST);
+    $scorecardid = (int)$cm->instance;
+
+    // Empty-state precondition (Q-rework-2). Populate-existing only operates
+    // on scorecards with no items and no bands; protects against accidental
+    // overwrite and matches SPEC §9.6 create-new-only directive.
+    $itemcount = (int)$DB->count_records('scorecard_items', ['scorecardid' => $scorecardid]);
+    $bandcount = (int)$DB->count_records('scorecard_bands', ['scorecardid' => $scorecardid]);
+    if ($itemcount > 0 || $bandcount > 0) {
+        return [
+            'state' => 'errors',
+            'errors' => [[
+                'path' => '',
+                'code' => 'notempty',
+                'message' => 'template:import:error:notempty',
+            ]],
+            'warnings' => [],
+            'cmid' => null,
+        ];
+    }
+
+    $decoded = json_decode($rawjson, true);
+    if (!is_array($decoded)) {
+        return [
+            'state' => 'errors',
+            'errors' => [[
+                'path' => '',
+                'code' => 'jsondecode_error',
+                'message' => 'template:import:jsondecode:error',
+            ]],
+            'warnings' => [],
+            'cmid' => null,
+        ];
+    }
+
+    $validation = scorecard_template_validate($decoded);
+    if (!empty($validation['errors'])) {
+        return [
+            'state' => 'errors',
+            'errors' => $validation['errors'],
+            'warnings' => $validation['warnings'],
+            'cmid' => null,
+        ];
+    }
+
+    if (!empty($validation['warnings']) && !$confirmed) {
+        return [
+            'state' => 'warnings',
+            'errors' => [],
+            'warnings' => $validation['warnings'],
+            'cmid' => null,
+        ];
+    }
+
+    scorecard_template_populate($decoded, $scorecardid);
+
+    return [
+        'state' => 'success',
+        'errors' => [],
+        'warnings' => $validation['warnings'],
+        'cmid' => $cmid,
+    ];
+}
