@@ -12,15 +12,15 @@ total score plus interpretation.
 
 ## Status
 
-**v0.6.0 — Phase 5b (Privacy and backup/restore) shipped 2026-04-28.**
-Scorecard activities now round-trip through Moodle's standard backup
-wizard (items, bands, and — when "Include user data" is on — attempts
-and responses with attempt-side snapshots preserved verbatim), and
-the privacy provider supports operator-driven export and deletion of
-learner submission data via Moodle's standard Privacy and policies
-tooling. Phases 1–5a shipped previously; the plugin remains
-MATURITY_ALPHA pending earned-by-production-usage signal. Per-tenant
-theming hooks are deferred to v1.x.
+**v0.7.0 — Phase 6 (JSON templates) shipped 2026-04-28.** Operators
+can now export a scorecard's authoring structure (items, bands,
+settings) as a JSON template file, distribute it, and populate a
+freshly-created empty scorecard with the imported items + bands via
+the manage page's empty-state affordance. Templates capture
+authoring structure only; user data (attempts, responses) lives in
+backup/restore. The plugin remains MATURITY_ALPHA pending
+earned-by-production-usage signal. Per-tenant theming hooks are
+deferred to v1.x.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
@@ -29,7 +29,8 @@ theming hooks are deferred to v1.x.
 | 3 — Learner submission | Submission form, validation, attempt + response save, scoring engine, band matching with snapshotting, result page, retake callout | shipped v0.3.0 |
 | 4 — Reporting | Reports tab, expandable detail, CSV export, group-mode awareness, pagination | shipped v0.4.0 |
 | 5a — Completion + gradebook | Activity completion via "Submit a scorecard attempt" rule, gradebook integration with latest-attempt overwrites and auto-grademax. Per-tenant theming hooks deferred to v1.x. | shipped v0.5.0 |
-| 5b — Backup + privacy | Full backup/restore (items, bands, attempts, responses with snapshot fidelity), privacy provider implementation | **shipped v0.6.0** |
+| 5b — Backup + privacy | Full backup/restore (items, bands, attempts, responses with snapshot fidelity), privacy provider implementation | shipped v0.6.0 |
+| 6 — JSON templates | Operator-facing template export from manage.php; populate-existing import flow on empty scorecards via the manage.php empty-state affordance | **shipped v0.7.0** |
 
 ## Installation
 
@@ -44,7 +45,7 @@ Standard Moodle plugin install:
    ```
 
 3. Confirm install at Site administration > Plugins overview > Activity
-   modules > Scorecard. Expected version: `2026042704`.
+   modules > Scorecard. Expected version: `2026042705`.
 
 Requires Moodle `2024100100` or later (Moodle 4.5+; tested on 5.1.3).
 
@@ -497,6 +498,140 @@ attempts or responses — useful when duplicating a scorecard
 template to a new course without bringing learner submission
 history along.
 
+## Templates
+
+JSON template export and import lets operators distribute a
+scorecard's authoring structure across courses and instances.
+Shipped at v0.7.0.
+
+### What templates capture (and what they don't)
+
+A template is a JSON file capturing a scorecard's **authoring
+structure**:
+
+- The scorecard's settings (name, intro, scale bounds, anchors,
+  result-display flags, fallback message, gradebook + completion
+  options, etc.)
+- The non-deleted items (prompt, anchors, visibility flag,
+  sortorder)
+- The non-deleted bands (range, label, message, sortorder)
+
+Templates **do not** carry user data — no attempts, no responses,
+no gradebook entries. User data lives in backup/restore (see
+**Backup and restore** above), which is the right path for
+duplicating a scorecard with its submission history.
+
+Templates also exclude soft-deleted items and bands; they
+represent the operator's *current* intended authoring structure,
+not the historical state. (Backup/restore preserves soft-deleted
+rows so historical attempts can resolve their original prompt
+and label text; templates have no historical attempts to resolve
+and so do not need the soft-deleted rows.)
+
+### Export workflow
+
+From the manage page of any scorecard with content (items or
+bands present), click **Export template** above the Items / Bands
+/ Reports tab tree. The browser downloads a JSON file named
+`<scorecard-name-slugified>-template.json` (the slug is produced
+via `clean_filename(format_string($scorecard->name))`; an empty
+slug falls back to `scorecard-template.json`).
+
+The downloaded JSON is operator-readable: pretty-printed with
+unescaped slashes and unicode, suitable for inspection or
+hand-editing. Distribute via email, file share, version control,
+or whatever channel makes sense for your workflow.
+
+Export is gated on `mod/scorecard:manage` (the same capability
+that gates items + bands authoring on the manage page).
+
+### Import workflow
+
+Import populates an **empty** scorecard with the template's
+items + bands + settings. The flow:
+
+1. In the destination course, use Moodle's standard "Add an
+   activity or resource" picker to create a new Scorecard. Save
+   with default settings; the scorecard exists but has no items
+   or bands yet.
+2. The new scorecard's manage page surfaces an **Import template**
+   button above the tab tree (the empty-state affordance; visible
+   only when items AND bands are both empty).
+3. Click Import template → upload the JSON file → submit.
+4. On success, you land on the populated manage page with a Moodle
+   notification: "Template imported. N items and M bands added."
+
+If the JSON validates with **errors** (missing fields, wrong
+types, wrong schema_version, cross-plugin name, scale invalid,
+displaystyle non-radio, format constants invalid, band range
+invalid), the form re-renders with a red error block listing the
+specific paths that failed. Fix the source JSON and re-upload.
+
+If the JSON validates with **warnings** (plugin version mismatch
+between source and destination plugin, unknown fields that will
+be ignored on import), a yellow warnings block surfaces alongside
+a "Yes, import anyway" button. Click to acknowledge and proceed;
+the operator does not need to re-upload after seeing warnings.
+
+Import is gated on `mod/scorecard:manage` at the module context —
+operator already used `:addinstance` to create the empty scorecard
+via the standard activity flow; populating it is "manage this
+scorecard" semantically.
+
+The import affordance is **suppressed** on populated scorecards
+(any items or bands present); the export affordance shows in its
+place. Direct-URL access to the import endpoint for a populated
+scorecard redirects to manage.php with an info notification.
+
+Overwrite and append import modes are deferred to v0.8+ if
+operator demand surfaces; v0.7.0 is create-new-only.
+
+### Filename convention
+
+Exported templates download as `<scorecard-name-slugified>-template.json`
+(slug via `clean_filename(format_string($scorecard->name))`).
+Examples:
+
+- A scorecard named "Career Fit Score" → `career_fit_score-template.json`.
+- A scorecard with HTML or punctuation in its name → cleaned to
+  filesystem-safe characters per Moodle's `clean_filename` helper.
+- An edge case where the cleaned slug is empty → falls back to
+  `scorecard-template.json` (no leading hyphen).
+
+### URL pattern for direct navigation
+
+Operators bookmarking the import flow or linking to it from LMS
+Light docs can use the URL pattern:
+
+```
+/mod/scorecard/template_import.php?cmid=<empty-scorecard-cmid>
+```
+
+Direct-URL access requires the same capability gate as the
+manage.php affordance (`mod/scorecard:manage` at module context).
+Direct access to the URL for a populated scorecard redirects to
+manage.php with an info notification — the URL is not a back-door
+around the empty-state gate.
+
+### plugin.version provenance
+
+Each exported template carries a `plugin` object with a `version`
+field reading the plugin's release string at export time. This is
+**informational provenance only** — the `schema_version` field
+("1.0" at v0.7.0) is the format-stability contract.
+
+Templates exported from older plugin versions stamp the older
+release string (e.g., `v0.6.0`); on import into a newer version,
+the validator surfaces a non-blocking warning. Operator
+acknowledges and proceeds via the confirmation form. The actual
+items + bands data is unaffected by the version mismatch — the
+warning is about producer/consumer asymmetry, not about correctness.
+
+If you maintain a library of templates across plugin versions,
+treat `plugin.version` as a useful audit signal but not a hard
+compatibility gate. The schema_version field is what binds the
+data shape.
+
 ## Running tests
 
 PHPUnit init (one-time per Moodle instance):
@@ -523,6 +658,10 @@ ddev exec bash -c 'cd /var/www/html/moodle && vendor/bin/phpunit \
     public/mod/scorecard/tests/result_render_test.php \
     public/mod/scorecard/tests/scoring_test.php \
     public/mod/scorecard/tests/submission_test.php \
+    public/mod/scorecard/tests/template_export_test.php \
+    public/mod/scorecard/tests/template_import_test.php \
+    public/mod/scorecard/tests/template_import_ui_test.php \
+    public/mod/scorecard/tests/template_validate_test.php \
     public/mod/scorecard/tests/privacy/provider_test.php \
     public/mod/scorecard/tests/backup/backup_test.php \
     public/mod/scorecard/tests/backup/restore_test.php'

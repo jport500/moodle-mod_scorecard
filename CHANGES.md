@@ -1,6 +1,150 @@
 # mod_scorecard release notes
 
-## v0.7.0 — Phase 6 (JSON templates) (in progress)
+## v0.7.0 — Phase 6 (JSON templates) (2026-04-28)
+
+**MATURITY_ALPHA. JSON template export and import are now usable
+end-to-end; per-tenant theming hooks (deferred to v1.x) and
+alternative grade methods (deferred to v1.1+) remain.** This release
+ships the template export pipeline (download a scorecard's authoring
+structure as JSON), the validation + instantiation helpers, and the
+operator-facing import UI surfaced from the empty-state of a freshly-
+created scorecard's manage page. Templates capture authoring
+structure only (items + bands + activity settings) — user data
+(attempts and responses) lives in backup/restore per SPEC §9.4.
+
+### Shipped
+
+**Template export pipeline.** Operator clicks "Export template" on
+the manage page of a scorecard with content → browser receives
+`<scorecard-name-slugified>-template.json` containing the envelope
+canonized in SPEC §9.6: `schema_version` ("1.0"), `plugin` (name +
+version producer fingerprint), `exported_at` (ISO 8601 UTC), the
+scorecard settings object, items array, and bands array. Soft-deleted
+rows excluded — templates represent the operator's current intended
+authoring structure, not historical state.
+
+**Template validation helper.** Pure-function helper consumes a
+parsed JSON template and returns structured `['errors' => [...],
+'warnings' => [...]]`. Errors block import (missing fields, wrong
+types, wrong schema_version, cross-plugin name, scale invalid,
+displaystyle non-radio, format constants invalid, band range
+invalid). Warnings inform but don't block (plugin version mismatch,
+unknown fields ignored on import). Strict on schema_version "1.0"
+at v0.7.0; permissive on unknown fields for forward-compat with
+future schema versions.
+
+**Template instantiation helpers (two parallel paths).**
+`scorecard_template_import(array $template, int $courseid, int
+$sectionnum)` is the create-new path — scaffolds a fresh scorecard
+activity via Moodle's `add_moduleinfo` and populates items + bands.
+Useful for programmatic create-from-template workflows.
+`scorecard_template_populate(array $template, int $scorecardid)` is
+the populate-existing path — assumes the scorecard already exists
+(via standard "Add an activity") and inserts items + bands into the
+existing row. Both helpers preserve sortorder gaps from the source
+template (sortorder is opaque-positional; round-trip identity
+preservation).
+
+**Operator-facing import UI (populate-existing path).** Operator
+creates an empty scorecard via standard "Add an activity" → lands
+on manage.php → sees "Import template" affordance above the tab
+tree (visible only when scorecard has zero items AND zero bands;
+suppressed otherwise) → uploads JSON file → validation feedback
+(structured errors block; warnings prompt confirmation) → success
+redirects to manage.php with a Moodle notification. The
+populate-existing model matches operator workflow ("I just made an
+empty scorecard, let me populate it") rather than create-from-
+template-via-course-nav (the architectural reversal at sub-step
+6.5 → 6.5b).
+
+**Warnings confirmation flow.** When validation surfaces non-
+blocking warnings, the operator sees the warnings list + a separate
+"Yes, import anyway" form alongside the warnings block. Hidden
+fields preserve the original JSON (base64-encoded) and cmid across
+the round-trip so the operator does not have to re-upload after
+seeing warnings; sesskey CSRF discipline applied to the
+confirmation surface.
+
+**Capability reuse for import.** `mod/scorecard:manage` at module
+context gates the import endpoint — operator already used
+`:addinstance` to create the empty scorecard via standard workflow;
+populating it is "manage this scorecard" semantically. No new
+capability introduced.
+
+**SPEC §9.6 directive added at sub-step 6.0** canonizing the format
+and import semantics. SPEC v0.4.2 → v0.5.0 sub-decimal bump.
+`§14` v1.1 roadmap row "Template import/export" removed (feature
+shipped at this release).
+
+### Operator action
+
+**Standard upgrade path.** Run `php admin/cli/upgrade.php
+--non-interactive` (or trigger the admin UI upgrade prompt). Phase 6
+ships no schema changes — templates are pure code additions
+(helpers + endpoints + UI + lang strings). The upgrade is stamp-
+only, advancing the version stamp from `2026042704` to `2026042705`.
+
+**Lang cache purge required after upgrade.** New `template:*` lang
+strings won't render correctly until caches are purged on a running
+site. Run `php admin/cli/purge_caches.php` after the upgrade
+completes (or visit Site administration > Development > Purge all
+caches). Skipping the purge causes import-flow operator-facing copy
+to render as literal `[[<key>]]` text until the cache TTL expires.
+
+**Export workflow.** From any populated scorecard's manage page,
+click "Export template" above the tab tree. Browser downloads
+`<scorecard-name-slugified>-template.json`. Distribute via email,
+file share, version control, or the LMS Light community channel
+of choice. Templates are operator-readable JSON; safe to inspect
+or hand-edit (validation catches malformations on import).
+
+**Import workflow.** In the destination course, use standard "Add
+an activity" → choose Scorecard → save with default settings (or
+fill in settings; the imported template's settings will overwrite
+nothing because items + bands are empty at this point). Land on
+the new empty scorecard's manage page. Click "Import template"
+above the tab tree. Upload the JSON file. Submit. On success,
+redirect to the populated manage page with a notification
+("Template imported. N items and M bands added.").
+
+**plugin.version provenance.** Templates carry a producer fingerprint
+(`plugin.version`) reading the release string from `version.php` at
+export time. Templates exported between sub-steps 6.1 and 6.6 stamp
+`v0.6.0` (the release at the time of export); templates exported
+from v0.7.0+ stamp the current release. The `schema_version` field
+("1.0") is the format-stability contract; `plugin.version` is
+informational provenance only. Cross-version mismatches surface as
+warnings (not errors) on import.
+
+**No completion or gradebook surprises on upgrade.** Phase 6 adds
+no schema changes; existing scorecards' configuration and stored
+data are preserved exactly as they were at v0.6.0.
+
+### Quality gates
+
+- `phpcs --standard=moodle` clean plugin-wide.
+- **201 PHPUnit tests / 908 assertions** across the plugin suite
+  (up from 168/728 at v0.6.0 — Phase 6 added +33 tests / +180
+  assertions covering template export envelope shape with native-
+  type round-trip, validation envelope structure + per-field rules
+  + permissive-on-unknown warnings, instantiation via add_moduleinfo
+  + sortorder gap preservation + transactional rollback,
+  populate-existing flow + empty-state precondition + round-trip
+  via empty-create-then-populate).
+- Empirical-bootstrap-state-verification at every Phase 6 sub-step
+  gate exercised production code paths against real dev-DB data:
+  Shape 1 (PHPUnit integration tests against real DB), Shape 2
+  (browser walkthrough — load-bearing at 6.1 export gate and
+  6.5b populate-existing UI gate), Shape 3 (full-pipeline CLI smoke
+  against scorecard id=2 with real Notion-pasted HTML preserved
+  byte-identically through export → JSON → validate → populate).
+- Architectural reversal at sub-step 6.5 → 6.5b documented as
+  in-gate course-correction. Original 6.5 implementation (course-
+  nav entry creating new scorecards) reversed to manage.php empty-
+  state populate-existing model after walkthrough surfaced
+  operator-workflow mismatch with the kickoff disposition. Reversal
+  was forward-only (no commit history rewriting); 6.5 was never
+  committed.
 
 ### Spec status
 
@@ -16,6 +160,67 @@ soft-delete exclusion (distinct from §9.4 backup/restore semantics).
 The §14 v1.1 roadmap row "Template import/export" was removed at
 this bump (feature shipped). SPEC sha pinned through the remaining
 Phase 6 sub-steps.
+
+**MATURITY_ALPHA preserved — earned-by-production-usage criterion
+stands.** Phase 5b retrospective named MATURITY_BETA as deferred to
+production-usage signal; v0.7.0 ships more features but doesn't
+deliver that signal. Operators evaluating mod_scorecard for
+adventurous early adoption can expect ALPHA behavior at v0.7.0;
+BETA bump anticipated at a future deliberate release decision.
+
+### Followups carried forward
+
+Phase 6 prerequisites are now closed (export pipeline + validation
++ instantiation + operator-facing populate-existing UI shipped).
+The remaining v0.6.0 followups still apply:
+
+- **Soft-delete restore** — operator path to reverse soft-deletion
+  on items and bands. Currently soft-delete is one-way; operators
+  needing to restore a soft-deleted item must duplicate via DB.
+- **Out-of-theoretical-range bands** — SPEC §4.3 quirk handling for
+  band ranges that extend beyond the activity's possible score
+  envelope. Bands save successfully but never match; warning
+  presentation is a v1.x consideration.
+- **Doc cleanup** — general documentation review across SPEC, README,
+  and inline docblocks. Defensive cleanup; not behavior-changing.
+
+New v0.7.0 followups (deferred per SPEC §9.6 or surfaced at Phase 6
+sub-step dispositions):
+
+- **Database-backed template library** — operators browse and select
+  templates from an in-platform library rather than swapping JSON
+  files through email. JSON files in operator inboxes may cover 80%
+  of the use case at v0.7.0; revisit at v0.8+ if community demand
+  surfaces.
+- **Overwrite and append import modes** — beyond the create-new-only
+  semantics canonized at SPEC §9.6 v0.7.0. Overwrite (replace items +
+  bands of an existing populated scorecard) and append (add items +
+  bands alongside existing) deferred to v0.8+ if operator demand.
+- **Cross-version schema compatibility** — when `schema_version`
+  beyond "1.0" ships, the validator extends to accept the supported
+  version range. v0.7.0 is single-version-only by design.
+- **Section selector in import UI** — operator chooses destination
+  course section at import time. Deferred at sub-step 6.5b
+  Q-reversal-3 (the scorecard already exists in its section per
+  the standard add-activity flow before import; operator moves
+  post-import via Moodle course editor).
+- **"Add an activity" chooser integration** — alternative
+  discoverability surface alongside the manage.php empty-state
+  affordance. Course-correction-as-scope at sub-step 6.5b deferred
+  this to v0.8+ if operator demand surfaces.
+
+Deferred to v1.x explicitly:
+
+- **Per-tenant theming hooks** — CSS custom properties for
+  per-tenant brand color overrides. Originally scoped with Phase 5a;
+  pulled to v1.x to keep that phase focused; remains deferred.
+- **Highest, first, and average grade methods** — alternatives to
+  latest-attempt overwrites (per SPEC §9.2 Decision v0.4.2).
+- **Cron-deferred bulk grade backfill** — adhoc task for deployments
+  with substantial pre-v0.5.0 attempt history. Not needed at LMS
+  Light's current pre-launch deployment scale; revisit if scaling
+  demands automated propagation rather than per-activity operator
+  remediation.
 
 ## v0.6.0 — Phase 5b (Privacy and backup/restore) (2026-04-28)
 
