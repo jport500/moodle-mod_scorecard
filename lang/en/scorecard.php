@@ -200,6 +200,7 @@ $string['template:import:notify:successwithwarnings'] = 'Scorecard imported with
 $string['template:import:submit'] = 'Import';
 $string['template:import:success:summary'] = 'Scorecard created with {$a->itemcount} items and {$a->bandcount} bands.';
 $string['template:import:warnings:cancellabel'] = 'Cancel';
+$string['template:import:warnings:confirm'] = 'Confirm below to import anyway.';
 $string['template:import:warnings:confirmbutton'] = 'Yes, import anyway';
 $string['template:import:warnings:heading'] = 'Template warnings';
 $string['template:import:warnings:intro'] = 'The following items will be ignored on import. You can proceed if this is expected; click "Yes, import anyway" below to acknowledge and continue.';
